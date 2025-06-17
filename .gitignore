@@ -1,0 +1,51 @@
+# データベースファイル
+*.db
+*.sqlite
+*.sqlite3
+
+# データディレクトリ
+data/
+cache/
+logs/
+
+# Python キャッシュ
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 仮想環境
+venv/
+env/
+.env
+
+# IDEファイル
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS ファイル
+.DS_Store
+Thumbs.db
+
+# 一時ファイル
+*.tmp
+*.temp
+*.log
+
+# 設定ファイル（機密情報含む可能性）
+config.local.py
+.env.local
+
+# 大容量JSONファイル
+*_export.json
+*_cache.json
+
+# テスト結果
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter Notebook
+.ipynb_checkpoints/ 
