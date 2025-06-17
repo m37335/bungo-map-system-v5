@@ -7,19 +7,26 @@ from typing import Optional
 # データベース接続設定
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/bungo_map"
+    "sqlite:///./data/bungo_map.db"
 )
 
 # エンジン設定
-engine = create_engine(
-    DATABASE_URL,
-    poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=1800,
-    echo=False
-)
+if DATABASE_URL.startswith("postgresql"):
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
+        echo=False
+    )
+else:
+    # SQLite用設定
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False
+    )
 
 # セッションファクトリ
 SessionLocal = sessionmaker(
@@ -41,4 +48,5 @@ def get_db() -> Optional[SessionLocal]:
 
 def init_db():
     """データベースの初期化"""
-    Base.metadata.create_all(bind=engine) 
+    from database.models import Base as ModelsBase
+    ModelsBase.metadata.create_all(bind=engine) 

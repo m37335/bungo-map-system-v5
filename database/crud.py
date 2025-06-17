@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, delete
 from datetime import datetime
+from sqlalchemy.sql import func
 
 from .models import Author, Work, Sentence, Place, SentencePlace
 
@@ -164,3 +165,181 @@ class DatabaseManager:
 
     def get_all_places(self):
         return self.session.query(Place).all()
+
+    def create_authors_batch(self, authors_data: List[Dict[str, Any]]) -> List[Author]:
+        """作家情報の一括作成"""
+        try:
+            created_authors = []
+            
+            for author_data in authors_data:
+                # 既存作家チェック
+                existing_author = self.session.query(Author).filter(
+                    Author.author_name == author_data.get('author_name')
+                ).first()
+                
+                if existing_author:
+                    # 既存作家の情報を更新
+                    for key, value in author_data.items():
+                        if hasattr(existing_author, key) and value is not None:
+                            setattr(existing_author, key, value)
+                    created_authors.append(existing_author)
+                else:
+                    # 新しい作家を作成
+                    author = Author(**author_data)
+                    self.session.add(author)
+                    created_authors.append(author)
+            
+            self.session.commit()
+            
+            for author in created_authors:
+                self.session.refresh(author)
+            
+            return created_authors
+            
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
+    def update_author_works_count(self, author_id: int, works_count: int) -> Author:
+        """作家の作品数を更新"""
+        author = self.get_author(author_id)
+        if not author:
+            raise ValueError(f"Author with id {author_id} not found")
+        
+        author.works_count = works_count
+        author.updated_at = datetime.utcnow()
+        
+        self.session.commit()
+        self.session.refresh(author)
+        
+        return author
+
+    def get_authors_with_no_works(self) -> List[Author]:
+        """作品数が0の作家を取得"""
+        return self.session.query(Author).filter(Author.works_count == 0).all()
+
+    def get_authors_by_copyright_status(self, status: str) -> List[Author]:
+        """著作権状態で作家を検索"""
+        # Author モデルに copyright_status フィールドがあると仮定
+        if hasattr(Author, 'copyright_status'):
+            return self.session.query(Author).filter(Author.copyright_status == status).all()
+        return []
+
+    def search_authors_by_name(self, search_term: str, limit: int = 50) -> List[Author]:
+        """作家名で部分検索"""
+        return self.session.query(Author).filter(
+            Author.author_name.like(f'%{search_term}%')
+        ).limit(limit).all()
+
+    def get_author_statistics(self) -> Dict[str, Any]:
+        """作家統計を取得"""
+        total_authors = self.session.query(Author).count()
+        total_works = self.session.query(func.sum(Author.works_count)).scalar() or 0
+        
+        # 作品数上位作家
+        top_authors = self.session.query(Author).order_by(
+            Author.works_count.desc()
+        ).limit(10).all()
+        
+        # 平均作品数
+        avg_works = total_works / total_authors if total_authors > 0 else 0
+        
+        return {
+            'total_authors': total_authors,
+            'total_works': total_works,
+            'average_works_per_author': round(avg_works, 2),
+            'top_authors': [(a.author_name, a.works_count) for a in top_authors]
+        }
+
+class AuthorCRUD:
+    """作家特化CRUD操作クラス"""
+    
+    def __init__(self, session: Session):
+        self.session = session
+    
+    def create_author(self, author_data: Dict[str, Any]) -> Optional[Author]:
+        """作家を作成"""
+        try:
+            # 重複チェック
+            existing = self.session.query(Author).filter(
+                Author.author_name == author_data.get('author_name')
+            ).first()
+            
+            if existing:
+                # 既存作家の更新
+                for key, value in author_data.items():
+                    if hasattr(existing, key) and value is not None:
+                        setattr(existing, key, value)
+                existing.updated_at = datetime.utcnow()
+                self.session.commit()
+                self.session.refresh(existing)
+                return existing
+            else:
+                # 新規作家作成
+                author = Author(**author_data)
+                self.session.add(author)
+                self.session.commit()
+                self.session.refresh(author)
+                return author
+                
+        except Exception as e:
+            self.session.rollback()
+            print(f"Author creation error: {e}")
+            return None
+    
+    def get_total_authors(self) -> int:
+        """総作家数を取得"""
+        return self.session.query(Author).count()
+    
+    def get_copyright_statistics(self) -> Dict[str, int]:
+        """著作権別統計を取得"""
+        stats = {}
+        results = self.session.query(
+            Author.copyright_status, 
+            func.count(Author.author_id)
+        ).group_by(Author.copyright_status).all()
+        
+        for status, count in results:
+            stats[status or 'unknown'] = count
+        
+        return stats
+    
+    def get_section_statistics(self) -> Dict[str, int]:
+        """セクション別統計を取得"""
+        stats = {}
+        results = self.session.query(
+            Author.section, 
+            func.count(Author.author_id)
+        ).group_by(Author.section).all()
+        
+        for section, count in results:
+            stats[section or 'unknown'] = count
+        
+        return stats
+    
+    def get_top_authors_by_works(self, limit: int = 10) -> List[Author]:
+        """作品数上位作家を取得"""
+        return self.session.query(Author).order_by(
+            Author.aozora_works_count.desc()
+        ).limit(limit).all()
+    
+    def search_authors(self, search_term: str, limit: int = 50) -> List[Author]:
+        """作家名で検索"""
+        return self.session.query(Author).filter(
+            Author.author_name.like(f'%{search_term}%')
+        ).limit(limit).all()
+    
+    def get_all_authors(self) -> List[Author]:
+        """全作家を取得"""
+        return self.session.query(Author).all()
+    
+    def get_authors_by_section(self, section: str) -> List[Author]:
+        """セクション別作家を取得"""
+        return self.session.query(Author).filter(
+            Author.section == section
+        ).all()
+    
+    def get_total_works_count(self) -> int:
+        """総作品数を取得"""
+        result = self.session.query(func.sum(Author.aozora_works_count)).scalar()
+        return result or 0

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, Text, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, JSON, Text, Boolean, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -18,6 +18,13 @@ class Author(Base):
     wikipedia_url = Column(String(512))
     description = Column(Text)
     portrait_url = Column(String(512))
+    
+    # 青空文庫関連フィールド
+    aozora_author_url = Column(String(512))  # 青空文庫作家ページURL
+    copyright_status = Column(String(20), default="expired")  # 'expired', 'active', 'unknown'
+    aozora_works_count = Column(Integer, default=0)  # 青空文庫の公開作品数
+    alias_info = Column(Text)  # 別名情報
+    section = Column(String(10))  # 50音順セクション（ア、カ、サ等）
     
     # 統計情報
     works_count = Column(Integer, default=0)
