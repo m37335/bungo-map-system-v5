@@ -216,7 +216,23 @@ class AozoraScraper:
                 response = session.get(author_url)
                 response.raise_for_status()
                 
-                soup = BeautifulSoup(response.text, 'html.parser')
+                # 文字コードの判定と適切なデコード
+                encoding = chardet.detect(response.content)['encoding']
+                if not encoding or encoding.lower() == 'ascii':
+                    # 青空文庫は通常Shift_JISを使用
+                    encoding = 'shift_jis'
+                
+                try:
+                    content = response.content.decode(encoding)
+                except UnicodeDecodeError:
+                    # フォールバック: UTF-8で試行
+                    try:
+                        content = response.content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # 最終フォールバック: エラーを無視
+                        content = response.content.decode('utf-8', errors='ignore')
+                
+                soup = BeautifulSoup(content, 'html.parser')
                 works = []
                 
                 for link in soup.find_all('a'):

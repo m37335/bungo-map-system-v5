@@ -17,22 +17,108 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """現行スキーマ対応 データベースマネージャー"""
     
-    def __init__(self, db_path: str = 'data/db/bungo_map.sqlite3'):
+    def __init__(self, db_path: str = 'data/bungo_map.db'):
         """初期化"""
         self.db_path = db_path
         logger.info(f"🌟 データベースマネージャーv4初期化: DBパス = {self.db_path}")
     
-    def save_author(self, author: Author) -> Optional[int]:
+    def get_connection(self):
+        """データベース接続を取得"""
+        return sqlite3.connect(self.db_path)
+    
+    def get_author_by_name(self, author_name: str) -> Optional[Author]:
+        """作者名で作者情報を取得"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM authors WHERE author_name = ?",
+                    (author_name,)
+                )
+                result = cursor.fetchone()
+                if result:
+                    # Authorオブジェクトを作成
+                    author = Author()
+                    for key in result.keys():
+                        setattr(author, key, result[key])
+                    return author
+                return None
+        except Exception as e:
+            logger.error(f"作者取得エラー: {e}")
+            return None
+    
+    def get_all_authors(self) -> List[Author]:
+        """すべての作者を取得"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("SELECT * FROM authors ORDER BY author_name")
+                results = cursor.fetchall()
+                
+                authors = []
+                for result in results:
+                    author = Author()
+                    for key in result.keys():
+                        setattr(author, key, result[key])
+                    authors.append(author)
+                
+                return authors
+        except Exception as e:
+            logger.error(f"作者一覧取得エラー: {e}")
+            return []
+    
+    def get_work_by_title_and_author(self, work_title: str, author_id: int) -> Optional[Work]:
+        """作品タイトルと作者IDで作品を取得"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM works WHERE work_title = ? AND author_id = ?",
+                    (work_title, author_id)
+                )
+                result = cursor.fetchone()
+                if result:
+                    work = Work()
+                    for key in result.keys():
+                        setattr(work, key, result[key])
+                    return work
+                return None
+        except Exception as e:
+            logger.error(f"作品取得エラー: {e}")
+            return None
+
+    def save_author(self, author_data) -> Optional[int]:
         """作者情報を保存し、IDを返す。既存ならそのIDを返す"""
         try:
+            # 辞書形式とAuthorオブジェクト両方に対応
+            if isinstance(author_data, dict):
+                author_name = author_data.get('author_name')
+                author_name_kana = author_data.get('author_name_kana')
+                birth_year = author_data.get('birth_year')
+                death_year = author_data.get('death_year')
+                period = author_data.get('period')
+                wikipedia_url = author_data.get('wikipedia_url')
+                description = author_data.get('description')
+                source_system = author_data.get('source_system', 'manual')
+            else:
+                author_name = author_data.author_name
+                author_name_kana = author_data.author_name_kana
+                birth_year = author_data.birth_year
+                death_year = author_data.death_year
+                period = author_data.period
+                wikipedia_url = author_data.wikipedia_url
+                description = author_data.description
+                source_system = getattr(author_data, 'source_system', 'manual')
+            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     "SELECT author_id FROM authors WHERE author_name = ?",
-                    (author.author_name,)
+                    (author_name,)
                 )
                 result = cursor.fetchone()
                 if result:
                     return result[0]
+                
                 # 新規作成
                 cursor = conn.execute(
                     """
@@ -44,14 +130,14 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        author.author_name,
-                        author.author_name_kana,
-                        author.birth_year,
-                        author.death_year,
-                        author.period,
-                        author.wikipedia_url,
-                        author.description,
-                        getattr(author, 'source_system', 'manual'),
+                        author_name,
+                        author_name_kana,
+                        birth_year,
+                        death_year,
+                        period,
+                        wikipedia_url,
+                        description,
+                        source_system,
                         datetime.now().isoformat(),
                         datetime.now().isoformat()
                     )
@@ -62,25 +148,50 @@ class DatabaseManager:
             logger.error(f"作者保存エラー: {e}")
             return None
 
-    def save_work(self, work: Work) -> Optional[int]:
-        """作品情報を保存"""
+    def save_work(self, work_data) -> Optional[int]:
+        """作品情報を保存（辞書形式とWorkオブジェクト両方に対応）"""
         try:
+            # 辞書形式とWorkオブジェクト両方に対応
+            if isinstance(work_data, dict):
+                work_title = work_data.get('work_title') or work_data.get('title')
+                author_id = work_data.get('author_id')
+                publication_year = work_data.get('publication_year')
+                genre = work_data.get('genre')
+                aozora_url = work_data.get('aozora_url') or work_data.get('work_url')
+                content_length = work_data.get('content_length', 0)
+                sentence_count = work_data.get('sentence_count', 0)
+                source_system = work_data.get('source_system', 'aozora_scraper')
+                processing_status = work_data.get('processing_status', 'pending')
+            else:
+                work_title = work_data.work_title
+                author_id = work_data.author_id
+                publication_year = work_data.publication_year
+                genre = work_data.genre
+                aozora_url = work_data.aozora_url
+                content_length = work_data.content_length
+                sentence_count = work_data.sentence_count
+                source_system = getattr(work_data, 'source_system', 'aozora_scraper')
+                processing_status = getattr(work_data, 'processing_status', 'pending')
+            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO works (
-                        work_title, author_id, publication_year, genre, aozora_url, content_length, sentence_count, source_system, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        work_title, author_id, publication_year, genre, aozora_url, 
+                        content_length, sentence_count, source_system, processing_status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        work.work_title,
-                        work.author_id,
-                        work.publication_year,
-                        work.genre,
-                        work.aozora_url,
-                        work.content_length,
-                        work.sentence_count,
-                        getattr(work, 'source_system', 'manual'),
+                        work_title,
+                        author_id,
+                        publication_year,
+                        genre,
+                        aozora_url,
+                        content_length,
+                        sentence_count,
+                        source_system,
+                        processing_status,
                         datetime.now().isoformat(),
                         datetime.now().isoformat()
                     )
@@ -91,26 +202,96 @@ class DatabaseManager:
             logger.error(f"作品保存エラー: {e}")
             return None
 
-    def save_sentence(self, sentence: Sentence) -> Optional[int]:
-        """センテンスを保存"""
+    def get_works_by_author(self, author_id: int) -> List[Work]:
+        """作者の作品一覧を取得"""
         try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM works WHERE author_id = ? ORDER BY work_title",
+                    (author_id,)
+                )
+                results = cursor.fetchall()
+                
+                works = []
+                for result in results:
+                    work = Work()
+                    for key in result.keys():
+                        setattr(work, key, result[key])
+                    works.append(work)
+                
+                return works
+        except Exception as e:
+            logger.error(f"作者の作品取得エラー: {e}")
+            return []
+
+    def get_authors_with_aozora_url(self) -> List[Author]:
+        """aozora_author_urlが設定されている作者一覧を取得"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM authors WHERE aozora_author_url IS NOT NULL AND aozora_author_url != '' ORDER BY author_name"
+                )
+                results = cursor.fetchall()
+                
+                authors = []
+                for result in results:
+                    author = Author()
+                    for key in result.keys():
+                        setattr(author, key, result[key])
+                    authors.append(author)
+                
+                return authors
+        except Exception as e:
+            logger.error(f"青空文庫URL付き作者一覧取得エラー: {e}")
+            return []
+
+    def save_sentence(self, sentence_data) -> Optional[int]:
+        """センテンス情報を保存（辞書形式またはSentenceオブジェクト対応）"""
+        try:
+            # 辞書形式とSentenceオブジェクト両方に対応
+            if isinstance(sentence_data, dict):
+                sentence_text = sentence_data.get('sentence_text')
+                work_id = sentence_data.get('work_id')
+                author_id = sentence_data.get('author_id')
+                sentence_order = sentence_data.get('sentence_order')
+                character_count = sentence_data.get('character_count', len(sentence_text or ''))
+                before_text = sentence_data.get('before_text')
+                after_text = sentence_data.get('after_text')
+                source_info = sentence_data.get('source_info', 'aozora_scraper')
+                quality_score = sentence_data.get('quality_score')
+                place_count = sentence_data.get('place_count', 0)
+            else:
+                sentence_text = sentence_data.sentence_text
+                work_id = sentence_data.work_id
+                author_id = sentence_data.author_id
+                before_text = getattr(sentence_data, 'before_text', None)
+                after_text = getattr(sentence_data, 'after_text', None)
+                source_info = getattr(sentence_data, 'source_info', 'aozora_scraper')
+                character_count = len(sentence_text or '')
+                quality_score = getattr(sentence_data, 'quality_score', None)
+                place_count = getattr(sentence_data, 'place_count', 0)
+            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO sentences (
-                        sentence_text, work_id, author_id, before_text, after_text, source_info, sentence_length, quality_score, place_count, created_at, updated_at
+                        sentence_text, work_id, author_id, before_text, after_text, 
+                        source_info, sentence_length, quality_score, place_count, 
+                        created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        sentence.sentence_text,
-                        sentence.work_id,
-                        sentence.author_id,
-                        sentence.before_text,
-                        sentence.after_text,
-                        sentence.source_info,
-                        sentence.sentence_length,
-                        sentence.quality_score,
-                        sentence.place_count,
+                        sentence_text,
+                        work_id,
+                        author_id,
+                        before_text,
+                        after_text,
+                        source_info,
+                        character_count,
+                        quality_score,
+                        place_count,
                         datetime.now().isoformat(),
                         datetime.now().isoformat()
                     )

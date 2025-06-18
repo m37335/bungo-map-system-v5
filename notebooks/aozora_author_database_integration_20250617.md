@@ -160,11 +160,13 @@ bungo-map-system-v4/
 │   ├── bungo_map.db                    # SQLiteデータベース
 │   ├── aozora_authors.json             # 作家情報JSON
 │   └── full_database_export.json       # 完全データエクスポート
-├── test_author_database_integration.py # 統合テスト（小規模）
-├── test_full_database_integration.py   # 統合テスト（全作家）
-├── test_url_fix.py                     # URL修正テスト
-├── check_kajii_url.py                  # 梶井基次郎URL確認
-└── verify_database_urls.py             # データベースURL検証
+├── tests/
+    ├── test_author_database_integration.py # 統合テスト（小規模）
+    ├── test_full_database_integration.py   # 統合テスト（全作家）
+    └── test_url_fix.py                     # URL修正テスト
+    └── verify_database_urls.py             # データベースURL検証
+    └── check_kajii_url.py                  # 梶井基次郎URL確認
+
 ```
 
 ## 🔧 制限事項
