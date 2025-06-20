@@ -26,6 +26,13 @@ from dotenv import load_dotenv
 # 環境変数読み込み
 load_dotenv()
 
+# GinZA統合抽出器の追加インポート
+try:
+    from .ginza_enhanced_extractor import GinzaEnhancedExtractor
+    GINZA_INTEGRATION_AVAILABLE = True
+except ImportError:
+    GINZA_INTEGRATION_AVAILABLE = False
+
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -50,7 +57,8 @@ class EnhancedPlaceExtractorV2:
     def __init__(self):
         self._init_enhanced_patterns()
         self._init_ai_verification()
-        logger.info("🌟 強化版地名抽出器V2（Legacy統合版）初期化完了")
+        self._init_ginza_integration()
+        logger.info("🌟 強化版地名抽出器V2（Legacy統合版 + GinZA統合）初期化完了")
         
     def _init_enhanced_patterns(self):
         """実証済み高性能パターンを初期化"""
@@ -175,24 +183,63 @@ class EnhancedPlaceExtractorV2:
             self.ai_enabled = False
             logger.warning("⚠️ OpenAI APIキーが設定されていません（AI検証機能無効）")
         
+    def _init_ginza_integration(self):
+        """GinZA統合機能の初期化"""
+        self.ginza_extractor = None
+        self.ginza_enabled = False
+        
+        if GINZA_INTEGRATION_AVAILABLE:
+            try:
+                self.ginza_extractor = GinzaEnhancedExtractor()
+                self.ginza_enabled = True
+                logger.info("✅ GinZA統合抽出器初期化成功")
+            except Exception as e:
+                logger.warning(f"⚠️ GinZA統合抽出器初期化失敗: {e}")
+        else:
+            logger.info("📝 GinZA統合機能無効（標準抽出のみ）")
+        
     def extract_places_from_text(self, text: str) -> List[ExtractedPlace]:
-        """テキストから地名を抽出（強化版）"""
+        """テキストから地名を抽出（強化版 + GinZA統合）"""
         extracted_places = []
         
-        # 1. 有名地名抽出（最高精度・81.3%実証済み）
+        # 1. GinZA統合抽出（利用可能な場合、最優先）
+        if self.ginza_enabled and self.ginza_extractor:
+            try:
+                ginza_places = self.ginza_extractor.extract_places_from_text(text)
+                # GinZA結果をExtractedPlace形式に変換
+                for ginza_place in ginza_places:
+                    extracted_place = ExtractedPlace(
+                        name=ginza_place.name,
+                        canonical_name=ginza_place.canonical_name,
+                        place_type=ginza_place.place_type,
+                        confidence=ginza_place.confidence,
+                        position=ginza_place.position,
+                        matched_text=ginza_place.matched_text,
+                        context_before=ginza_place.context_before,
+                        context_after=ginza_place.context_after,
+                        extraction_method=f"ginza_{ginza_place.extraction_method}",
+                        priority=0  # GinZA結果を最優先
+                    )
+                    extracted_places.append(extracted_place)
+                logger.debug(f"🤖 GinZA統合抽出: {len(ginza_places)}件")
+            except Exception as e:
+                logger.warning(f"⚠️ GinZA統合抽出エラー: {e}")
+        
+        # 2. 有名地名抽出（実証済み高精度・81.3%）
         for place_name in self.famous_places:
             places = self._extract_by_exact_match(text, place_name, '有名地名', 0.92)
             extracted_places.extend(places)
             
-        # 2. パターンマッチング抽出
+        # 3. パターンマッチング抽出
         for pattern_info in self.enhanced_patterns:
             places = self._extract_by_pattern(text, pattern_info)
             extracted_places.extend(places)
             
-        # 3. 重複除去・優先度ソート
+        # 4. 統合重複除去・優先度ソート
         extracted_places = self._remove_duplicates_with_priority(extracted_places)
         extracted_places.sort(key=lambda x: (x.priority, -x.confidence, x.position))
         
+        logger.info(f"✅ 統合地名抽出完了: {len(extracted_places)}件 (GinZA: {self.ginza_enabled})")
         return extracted_places
         
     def _extract_by_exact_match(self, text: str, place_name: str, place_type: str, confidence: float) -> List[ExtractedPlace]:
