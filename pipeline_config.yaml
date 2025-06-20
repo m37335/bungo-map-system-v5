@@ -1,0 +1,255 @@
+# 文豪ゆかり地図システム v4.0 - 統合パイプライン設定
+# 作成日: 2025-06-19
+
+# =============================================================================
+# パイプライン基本設定
+# =============================================================================
+pipeline:
+  name: "bungo_map_complete_pipeline"
+  version: "4.0"
+  description: "青空文庫から地名抽出までの完全自動パイプライン"
+
+# =============================================================================
+# 実行設定
+# =============================================================================
+execution:
+  mode: "batch"  # batch, streaming, realtime
+  parallel_workers: 3
+  rate_limit_seconds: 1.0
+  max_retries: 3
+  timeout_seconds: 300
+
+# =============================================================================
+# データベース設定
+# =============================================================================
+database:
+  path: "data/bungo_map.db"
+  backup_before_run: true
+  vacuum_after_run: true
+
+# =============================================================================
+# 青空文庫処理設定
+# =============================================================================
+aozora:
+  rate_limit: 1.0
+  user_agent: "BungoMapBot/4.0 (Educational Research Purpose)"
+  cache_enabled: true
+  cache_dir: "data/aozora_cache"
+  encoding: "shift_jis"
+
+# =============================================================================
+# パイプライン段階設定
+# =============================================================================
+stages:
+  
+  # ステージ1: 作者情報確認
+  - name: "author_validation"
+    enabled: true
+    description: "作者の存在確認と青空文庫URL検証"
+    config:
+      required_fields: ["author_name", "aozora_author_url"]
+      
+  # ステージ2: 作品リスト収集
+  - name: "works_collection"
+    enabled: true
+    description: "青空文庫から作品一覧を取得"
+    config:
+      parse_genres: true
+      skip_duplicates: true
+      max_works_per_author: 200
+      
+  # ステージ3: 作品情報保存
+  - name: "works_storage"
+    enabled: true
+    description: "作品情報をデータベースに保存"
+    config:
+      update_existing: false
+      validate_urls: true
+      
+  # ステージ4: 本文取得
+  - name: "content_fetching"
+    enabled: true
+    description: "XHTML版本文を取得"
+    config:
+      prefer_xhtml: true
+      max_content_size: 1048576  # 1MB
+      encoding_detection: true
+      
+  # ステージ5: テキスト前処理
+  - name: "text_preprocessing"
+    enabled: true
+    description: "HTMLタグ除去・テキストクリーニング"
+    config:
+      remove_html_tags: true
+      remove_ruby: true
+      normalize_whitespace: true
+      remove_annotations: true
+      
+  # ステージ6: 品質検証
+  - name: "quality_validation"
+    enabled: true
+    description: "テキスト品質の検証"
+    config:
+      min_length: 100
+      max_length: 1000000
+      encoding_check: true
+      character_ratio_check: true
+      
+  # ステージ7: センテンス分割
+  - name: "sentence_segmentation"
+    enabled: true
+    description: "文単位での分割"
+    config:
+      method: "rule_based"  # rule_based, ml_based, hybrid
+      min_sentence_length: 3
+      max_sentence_length: 500
+      
+  # ステージ8: センテンス保存
+  - name: "sentence_storage"
+    enabled: true
+    description: "センテンスをデータベースに保存"
+    config:
+      batch_size: 100
+      preserve_order: true
+      
+  # ステージ9: 地名抽出
+  - name: "place_extraction"
+    enabled: true
+    description: "センテンスから地名を抽出"
+    config:
+      extractor_type: "enhanced"  # simple, enhanced, ai_powered
+      confidence_threshold: 0.7
+      max_places_per_sentence: 10
+      context_window: 50
+      
+  # ステージ10: ジオコーディング
+  - name: "geocoding"
+    enabled: true
+    description: "地名の座標取得"
+    config:
+      provider: "context_aware"  # google, context_aware, hybrid
+      confidence_threshold: 0.8
+      japan_only: true
+      cache_results: true
+
+# =============================================================================
+# 処理対象設定
+# =============================================================================
+targets:
+  
+  # 単一作者処理
+  single_author:
+    enabled: true
+    parameter: "author_name"
+    
+  # 複数作者処理
+  multiple_authors:
+    enabled: true
+    parameter: "author_list"
+    parallel_processing: true
+    
+  # 作品URL直接指定
+  direct_works:
+    enabled: true
+    parameter: "work_urls"
+    
+  # 全作者処理
+  all_authors:
+    enabled: true
+    batch_size: 10
+    limit: null
+
+# =============================================================================
+# 出力設定
+# =============================================================================
+output:
+  
+  # ログ設定
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file: "logs/pipeline_{timestamp}.log"
+    console: true
+    
+  # レポート設定
+  reports:
+    enabled: true
+    format: ["json", "markdown"]
+    output_dir: "reports"
+    include_statistics: true
+    include_errors: true
+    
+  # データエクスポート
+  export:
+    enabled: false
+    formats: ["csv", "json", "geojson"]
+    output_dir: "data/export"
+
+# =============================================================================
+# 通知設定
+# =============================================================================
+notifications:
+  
+  # 完了通知
+  completion:
+    enabled: false
+    webhook_url: null
+    email: null
+    
+  # エラー通知  
+  errors:
+    enabled: true
+    threshold: 5
+    webhook_url: null
+
+# =============================================================================
+# パフォーマンス設定
+# =============================================================================
+performance:
+  
+  # メモリ管理
+  memory:
+    max_sentences_in_memory: 10000
+    garbage_collection_interval: 100
+    
+  # キャッシュ設定
+  cache:
+    enabled: true
+    ttl_seconds: 3600
+    max_size_mb: 100
+    
+  # 並列処理
+  parallel:
+    max_workers: 4
+    queue_size: 50
+
+# =============================================================================
+# デバッグ設定
+# =============================================================================
+debug:
+  enabled: false
+  save_intermediate_files: false
+  detailed_logging: false
+  profiling: false
+
+# =============================================================================
+# 作者別個別設定（オプション）
+# =============================================================================
+author_specific:
+  
+  # 夏目漱石
+  "夏目 漱石":
+    stages:
+      sentence_segmentation:
+        config:
+          method: "hybrid"  # より高精度な分割
+      place_extraction:
+        config:
+          extractor_type: "ai_powered"
+          
+  # 芥川龍之介  
+  "芥川 龍之介":
+    stages:
+      place_extraction:
+        config:
+          confidence_threshold: 0.8  # より厳格な閾値 

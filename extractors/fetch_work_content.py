@@ -187,28 +187,39 @@ class WorkContentProcessor:
         return text.strip()
     
     def split_into_sentences(self, text: str) -> List[str]:
-        """テキストをセンテンス単位に分割（ワークフロー⑥）
+        """テキストをセンテンス単位に分割（ワークフロー⑥）- 句読点保持版
         
         Args:
             text: クリーニング済みテキスト
             
         Returns:
-            List[str]: センテンスのリスト
+            List[str]: センテンスのリスト（句読点保持）
         """
         if not text:
             return []
         
-        # 文末記号で分割
-        sentences = re.split(r'[。．！？]', text)
+        # 句読点を保持しながら分割
+        parts = re.split(r'([。．！？])', text)
         
-        # 空の文・短すぎる文を除去
-        filtered_sentences = []
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if len(sentence) >= 3:  # 最低3文字以上
-                filtered_sentences.append(sentence)
+        sentences = []
+        current_sentence = ""
         
-        return filtered_sentences
+        for part in parts:
+            if part in ['。', '．', '！', '？']:
+                # 句読点を現在の文に追加
+                current_sentence += part
+                # 文が完成したので追加
+                if current_sentence.strip() and len(current_sentence.strip()) >= 3:
+                    sentences.append(current_sentence.strip())
+                current_sentence = ""
+            else:
+                current_sentence += part
+        
+        # 最後の部分を処理（句読点なしで終わる場合）
+        if current_sentence.strip() and len(current_sentence.strip()) >= 3:
+            sentences.append(current_sentence.strip())
+        
+        return sentences
     
     def process_work_content(self, work_id: int, work_title: str, work_url: str, author_id: int) -> Dict[str, int]:
         """作品の本文を処理してデータベースに保存

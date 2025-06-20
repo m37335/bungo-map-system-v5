@@ -248,51 +248,32 @@ class DatabaseManager:
             return []
 
     def save_sentence(self, sentence_data) -> Optional[int]:
-        """センテンス情報を保存（辞書形式またはSentenceオブジェクト対応）"""
+        """センテンス情報を保存（最適化済みスキーマ対応）"""
         try:
             # 辞書形式とSentenceオブジェクト両方に対応
             if isinstance(sentence_data, dict):
                 sentence_text = sentence_data.get('sentence_text')
                 work_id = sentence_data.get('work_id')
                 author_id = sentence_data.get('author_id')
-                sentence_order = sentence_data.get('sentence_order')
                 character_count = sentence_data.get('character_count', len(sentence_text or ''))
-                before_text = sentence_data.get('before_text')
-                after_text = sentence_data.get('after_text')
-                source_info = sentence_data.get('source_info', 'aozora_scraper')
-                quality_score = sentence_data.get('quality_score')
-                place_count = sentence_data.get('place_count', 0)
             else:
                 sentence_text = sentence_data.sentence_text
                 work_id = sentence_data.work_id
                 author_id = sentence_data.author_id
-                before_text = getattr(sentence_data, 'before_text', None)
-                after_text = getattr(sentence_data, 'after_text', None)
-                source_info = getattr(sentence_data, 'source_info', 'aozora_scraper')
                 character_count = len(sentence_text or '')
-                quality_score = getattr(sentence_data, 'quality_score', None)
-                place_count = getattr(sentence_data, 'place_count', 0)
             
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO sentences (
-                        sentence_text, work_id, author_id, before_text, after_text, 
-                        source_info, sentence_length, quality_score, place_count, 
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        sentence_text, work_id, author_id, sentence_length, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         sentence_text,
                         work_id,
                         author_id,
-                        before_text,
-                        after_text,
-                        source_info,
                         character_count,
-                        quality_score,
-                        place_count,
-                        datetime.now().isoformat(),
                         datetime.now().isoformat()
                     )
                 )

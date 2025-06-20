@@ -4,6 +4,9 @@ import re
 from dataclasses import dataclass
 from ..ai.llm import LLMManager
 from ..ai.nlp import NLPManager, NLPResult
+import sqlite3
+from datetime import datetime
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,7 @@ class EnhancedPlaceExtractor:
     def __init__(self):
         self.llm_manager = LLMManager()
         self.nlp_manager = NLPManager()
+        self.db_manager = DatabaseManager()
         
         # 抽出レベルとその信頼度閾値
         self.extraction_levels = {
@@ -383,6 +387,277 @@ class EnhancedPlaceExtractor:
         """テキストを文に分割"""
         sentences = re.split(r'[。．！？!?]+', text)
         return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 5]
+
+    def extract_places_from_text(self, text: str) -> List[ExtractedPlace]:
+        """テキストから地名を抽出する"""
+        extracted_places = []
+        
+        # 都道府県抽出
+        for pattern in self.prefecture_patterns:
+            places = self._extract_by_pattern(text, pattern, '都道府県', 0.9)
+            extracted_places.extend(places)
+            
+        # 主要都市抽出
+        for pattern in self.city_patterns:
+            places = self._extract_by_pattern(text, pattern, '市区町村', 0.85)
+            extracted_places.extend(places)
+            
+        # 歴史地名抽出
+        for pattern in self.historical_patterns:
+            places = self._extract_by_pattern(text, pattern, '歴史地名', 0.8)
+            extracted_places.extend(places)
+            
+        # 有名地名抽出
+        for pattern in self.famous_patterns:
+            places = self._extract_by_pattern(text, pattern, '有名地名', 0.85)
+            extracted_places.extend(places)
+            
+        # 区・郡抽出
+        for pattern in self.district_patterns:
+            places = self._extract_by_pattern(text, pattern, '郡', 0.7)
+            extracted_places.extend(places)
+            
+        # 重複除去
+        extracted_places = self._remove_duplicates(extracted_places)
+        
+        return extracted_places
+        
+    def _extract_by_pattern(self, text: str, pattern: str, place_type: str, confidence: float) -> List[ExtractedPlace]:
+        """指定されたパターンで地名を抽出する"""
+        places = []
+        
+        for match in re.finditer(pattern, text):
+            name = match.group()
+            position = match.start()
+            
+            # 前後のコンテキストを取得
+            context_before = text[max(0, position-20):position]
+            context_after = text[position+len(name):position+len(name)+20]
+            
+            place = ExtractedPlace(
+                name=name,
+                canonical_name=self._normalize_place_name(name),
+                place_type=place_type,
+                confidence=confidence,
+                position=position,
+                matched_text=name,
+                context_before=context_before,
+                context_after=context_after,
+                extraction_method='regex'
+            )
+            
+            places.append(place)
+            
+        return places
+        
+    def _normalize_place_name(self, name: str) -> str:
+        """地名を正規化する"""
+        # 「県」「府」「都」などを除去して正規化
+        normalized = re.sub(r'[県府都道]$', '', name)
+        return normalized if normalized else name
+        
+    def _remove_duplicates(self, places: List[ExtractedPlace]) -> List[ExtractedPlace]:
+        """重複する地名を除去する"""
+        seen = set()
+        unique_places = []
+        
+        for place in places:
+            key = (place.canonical_name, place.position)
+            if key not in seen:
+                seen.add(key)
+                unique_places.append(place)
+                
+        return unique_places
+        
+    def extract_places_from_sentence(self, sentence_id: int, sentence_text: str) -> List[ExtractedPlace]:
+        """センテンスから地名を抽出し、結果を返す"""
+        logger.info(f"センテンス {sentence_id} から地名抽出開始")
+        
+        places = self.extract_places_from_text(sentence_text)
+        
+        logger.info(f"センテンス {sentence_id}: {len(places)}件の地名を抽出")
+        
+        return places
+        
+    def save_extracted_places(self, sentence_id: int, places: List[ExtractedPlace]) -> int:
+        """抽出された地名をデータベースに保存する"""
+        if not places:
+            return 0
+            
+        saved_count = 0
+        
+        for place in places:
+            try:
+                # 地名マスターに追加（存在しない場合）
+                place_id = self._get_or_create_place_master(place)
+                
+                # センテンス-地名関連を保存
+                self._save_sentence_place_relation(sentence_id, place_id, place)
+                
+                saved_count += 1
+                
+            except Exception as e:
+                logger.error(f"地名保存エラー: {place.name} - {e}")
+                
+        return saved_count
+        
+    def _get_or_create_place_master(self, place: ExtractedPlace) -> int:
+        """地名マスターテーブルから地名IDを取得、存在しない場合は作成"""
+        conn = sqlite3.connect('data/bungo_map.db')
+        cursor = conn.cursor()
+        
+        try:
+            # 既存地名を検索
+            cursor.execute("""
+                SELECT place_id FROM places 
+                WHERE canonical_name = ? OR place_name = ?
+            """, (place.canonical_name, place.name))
+            
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+                
+            # 新規地名を作成
+            cursor.execute("""
+                INSERT INTO places (
+                    place_name, canonical_name, place_type, confidence,
+                    mention_count, source_system, verification_status,
+                    created_at
+                ) VALUES (?, ?, ?, ?, 1, 'place_extractor', 'auto_extracted', ?)
+            """, (
+                place.name, place.canonical_name, place.place_type, 
+                place.confidence, datetime.now()
+            ))
+            
+            place_id = cursor.lastrowid
+            conn.commit()
+            
+            logger.info(f"新規地名登録: {place.name} (ID: {place_id})")
+            return place_id
+            
+        finally:
+            conn.close()
+            
+    def _save_sentence_place_relation(self, sentence_id: int, place_id: int, place: ExtractedPlace):
+        """センテンス-地名関連を保存"""
+        conn = sqlite3.connect('data/bungo_map.db')
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO sentence_places (
+                    sentence_id, place_id, extraction_method, confidence,
+                    position_in_sentence, context_before, context_after,
+                    matched_text, verification_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'auto_extracted', ?)
+            """, (
+                sentence_id, place_id, place.extraction_method, place.confidence,
+                place.position, place.context_before, place.context_after,
+                place.matched_text, datetime.now()
+            ))
+            
+            conn.commit()
+            
+        finally:
+            conn.close()
+            
+    def process_sentences_batch(self, limit: Optional[int] = None) -> Dict[str, int]:
+        """センテンスを一括処理して地名抽出を実行"""
+        conn = sqlite3.connect('data/bungo_map.db')
+        cursor = conn.cursor()
+        
+        try:
+            # 未処理のセンテンスを取得
+            query = """
+                SELECT s.sentence_id, s.sentence_text 
+                FROM sentences s
+                LEFT JOIN sentence_places sp ON s.sentence_id = sp.sentence_id
+                WHERE sp.sentence_id IS NULL
+            """
+            
+            if limit:
+                query += f" LIMIT {limit}"
+                
+            cursor.execute(query)
+            sentences = cursor.fetchall()
+            
+            logger.info(f"処理対象センテンス: {len(sentences)}件")
+            
+            stats = {
+                'processed_sentences': 0,
+                'extracted_places': 0,
+                'saved_places': 0,
+                'errors': 0
+            }
+            
+            for sentence_id, sentence_text in sentences:
+                try:
+                    # 地名抽出
+                    places = self.extract_places_from_sentence(sentence_id, sentence_text)
+                    
+                    # データベース保存
+                    saved_count = self.save_extracted_places(sentence_id, places)
+                    
+                    stats['processed_sentences'] += 1
+                    stats['extracted_places'] += len(places)
+                    stats['saved_places'] += saved_count
+                    
+                    if len(places) > 0:
+                        logger.info(f"センテンス {sentence_id}: {len(places)}件抽出")
+                        
+                except Exception as e:
+                    stats['errors'] += 1
+                    logger.error(f"センテンス {sentence_id} 処理エラー: {e}")
+                    
+            return stats
+            
+        finally:
+            conn.close()
+            
+    def get_extraction_statistics(self) -> Dict[str, any]:
+        """地名抽出の統計情報を取得"""
+        conn = sqlite3.connect('data/bungo_map.db')
+        cursor = conn.cursor()
+        
+        try:
+            stats = {}
+            
+            # 総センテンス数
+            cursor.execute("SELECT COUNT(*) FROM sentences")
+            stats['total_sentences'] = cursor.fetchone()[0]
+            
+            # 処理済みセンテンス数
+            cursor.execute("SELECT COUNT(DISTINCT sentence_id) FROM sentence_places")
+            stats['processed_sentences'] = cursor.fetchone()[0]
+            
+            # 抽出された地名数
+            cursor.execute("SELECT COUNT(*) FROM places")
+            stats['total_places'] = cursor.fetchone()[0]
+            
+            # 地名-センテンス関連数
+            cursor.execute("SELECT COUNT(*) FROM sentence_places")
+            stats['total_relations'] = cursor.fetchone()[0]
+            
+            # 地名種別統計
+            cursor.execute("""
+                SELECT place_type, COUNT(*) 
+                FROM places 
+                GROUP BY place_type
+            """)
+            stats['place_types'] = dict(cursor.fetchall())
+            
+            # 抽出手法統計
+            cursor.execute("""
+                SELECT extraction_method, COUNT(*) 
+                FROM sentence_places 
+                GROUP BY extraction_method
+            """)
+            stats['extraction_methods'] = dict(cursor.fetchall())
+            
+            return stats
+            
+        finally:
+            conn.close()
 
 # 下位互換のためのエイリアス
 PlaceExtractor = EnhancedPlaceExtractor
