@@ -23,6 +23,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from extractors.process_complete_author import CompleteAuthorProcessor
 from extractors.enhanced_place_extractor_v2 import EnhancedPlaceExtractorV2
 from ai.context_aware_geocoding import ContextAwareGeocoder
+from extractors.wikipedia_author_enricher import WikipediaAuthorEnricher
 
 class BungoPipeline:
     """文豪地図システム統合パイプライン"""
@@ -32,6 +33,7 @@ class BungoPipeline:
         self.author_processor = CompleteAuthorProcessor()
         self.place_extractor = EnhancedPlaceExtractorV2()
         self.context_aware_geocoder = ContextAwareGeocoder()
+        self.wikipedia_enricher = WikipediaAuthorEnricher()
         print("✅ パイプライン初期化完了")
     
     def run_full_pipeline(self, author_name: str, include_places: bool = True, include_geocoding: bool = True) -> Dict[str, Any]:
@@ -206,6 +208,11 @@ def main():
   python3 run_pipeline.py --cleanup-preview
   python3 run_pipeline.py --cleanup
   python3 run_pipeline.py --delete "先日飯島" "今飯島" "夕方山"
+  
+  # Wikipedia作者情報補完
+  python3 run_pipeline.py --enrich-preview
+  python3 run_pipeline.py --enrich-authors
+  python3 run_pipeline.py --enrich-specific "夏目 漱石" "芥川 龍之介"
         """
     )
     
@@ -224,10 +231,49 @@ def main():
     parser.add_argument('--analyze', type=str, help='指定した地名の使用状況を詳細分析')
     parser.add_argument('--stats', action='store_true', help='ジオコーディング統計表示')
     
+    # Wikipedia作者情報補完機能
+    parser.add_argument('--enrich-authors', action='store_true', help='Wikipedia作者情報自動補完（全作者）')
+    parser.add_argument('--enrich-preview', action='store_true', help='作者情報不足状況をプレビュー表示')
+    parser.add_argument('--enrich-specific', nargs='+', help='指定作者のみ情報補完（複数可）')
+    
     args = parser.parse_args()
     
     # パイプライン初期化
     pipeline = BungoPipeline()
+    
+    # Wikipedia作者情報補完プレビュー
+    if args.enrich_preview:
+        print("=== 🔍 作者情報不足状況プレビュー ===")
+        missing_info = pipeline.wikipedia_enricher.preview_missing_info()
+        return
+    
+    # Wikipedia作者情報自動補完（全作者）
+    if args.enrich_authors:
+        print("=== 🌟 Wikipedia作者情報自動補完（全作者） ===")
+        try:
+            stats = pipeline.wikipedia_enricher.enrich_all_authors()
+            pipeline.wikipedia_enricher.print_statistics()
+        except KeyboardInterrupt:
+            print("\n⚠️ 処理が中断されました")
+        except Exception as e:
+            print(f"❌ エラーが発生しました: {e}")
+        finally:
+            pipeline.wikipedia_enricher.close()
+        return
+    
+    # Wikipedia作者情報補完（指定作者のみ）
+    if args.enrich_specific:
+        print(f"=== 🎯 Wikipedia作者情報補完（指定作者: {', '.join(args.enrich_specific)}） ===")
+        try:
+            stats = pipeline.wikipedia_enricher.enrich_specific_authors(args.enrich_specific)
+            pipeline.wikipedia_enricher.print_statistics()
+        except KeyboardInterrupt:
+            print("\n⚠️ 処理が中断されました")
+        except Exception as e:
+            print(f"❌ エラーが発生しました: {e}")
+        finally:
+            pipeline.wikipedia_enricher.close()
+        return
     
     # 統計表示
     if args.stats:
