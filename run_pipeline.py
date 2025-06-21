@@ -24,6 +24,8 @@ from extractors.process_complete_author import CompleteAuthorProcessor
 from extractors.enhanced_place_extractor_v2 import EnhancedPlaceExtractorV2
 from ai.context_aware_geocoding import ContextAwareGeocoder
 from extractors.wikipedia_author_enricher import WikipediaAuthorEnricher
+from database.sentence_places_enricher import SentencePlacesEnricher
+from extractors.aozora_metadata_extractor import AozoraMetadataExtractor
 
 class BungoPipeline:
     """文豪地図システム統合パイプライン"""
@@ -34,9 +36,11 @@ class BungoPipeline:
         self.place_extractor = EnhancedPlaceExtractorV2()
         self.context_aware_geocoder = ContextAwareGeocoder()
         self.wikipedia_enricher = WikipediaAuthorEnricher()
+        self.sentence_places_enricher = SentencePlacesEnricher()
+        self.metadata_extractor = AozoraMetadataExtractor()
         print("✅ パイプライン初期化完了")
     
-    def run_full_pipeline(self, author_name: str, include_places: bool = True, include_geocoding: bool = True) -> Dict[str, Any]:
+    def run_full_pipeline(self, author_name: str, include_places: bool = True, include_geocoding: bool = True, include_maintenance: bool = True) -> Dict[str, Any]:
         """完全パイプライン実行"""
         start_time = datetime.now()
         print(f"\n🌟 文豪ゆかり地図システム - 完全パイプライン開始")
@@ -119,6 +123,24 @@ class BungoPipeline:
                     results['places_saved'] = step2_result.get('saved_places', 0)
                     print(f"✅ ステップ2完了: {results['sentences_processed']}センテンス処理、{results['places_extracted']}地名抽出、{results['places_saved']}件保存")
             
+            # ステップ3: データ品質保証（新機能）
+            if include_maintenance:
+                print("\n🔄 ステップ3: データ品質保証・メンテナンス...")
+                print("  📝 sentence_places作者・作品情報補完")
+                print("  📚 worksメタデータ自動補完")
+                print("  📅 出版年情報更新")
+                print("  🔧 matched_text文全体修正")
+                
+                step3_result = self._run_data_quality_maintenance()
+                results.update(step3_result)
+                
+                if step3_result['maintenance_success']:
+                    print(f"✅ ステップ3完了: データ品質保証処理正常完了")
+                else:
+                    print(f"⚠️ ステップ3警告: 一部メンテナンス処理でエラーが発生しましたが、パイプラインは継続します")
+            else:
+                print("\n⏭️ ステップ3: データ品質保証・メンテナンス（スキップ）")
+            
             results['success'] = True
             
         except Exception as e:
@@ -169,6 +191,128 @@ class BungoPipeline:
         """ジオコーディング統計取得"""
         return self.context_aware_geocoder.get_geocoding_statistics()
     
+    def _run_data_quality_maintenance(self) -> Dict[str, Any]:
+        """データ品質保証・メンテナンス処理"""
+        maintenance_results = {
+            'maintenance_success': True,
+            'enriched_sentence_places': 0,
+            'enriched_works': 0,
+            'updated_publication_years': 0,
+            'fixed_matched_texts': 0,
+            'maintenance_errors': []
+        }
+        
+        try:
+            # 1. sentence_places補完
+            try:
+                enrichment_result = self.sentence_places_enricher.run_full_enrichment()
+                maintenance_results['enriched_sentence_places'] = enrichment_result.get('total_updates', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"sentence_places補完エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+            
+            # 2. worksメタデータ補完
+            try:
+                works_result = self._enrich_works_metadata()
+                maintenance_results['enriched_works'] = works_result.get('enriched_count', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"worksメタデータ補完エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+            
+            # 3. work_publication_year更新
+            try:
+                publication_result = self._update_work_publication_years()
+                maintenance_results['updated_publication_years'] = publication_result.get('updated_count', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"出版年更新エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+            
+            # 4. matched_text修正
+            try:
+                matched_text_result = self._fix_matched_text()
+                maintenance_results['fixed_matched_texts'] = matched_text_result.get('fixed_count', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"matched_text修正エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+                
+        except Exception as e:
+            maintenance_results['maintenance_errors'].append(f"メンテナンス処理全体エラー: {e}")
+            maintenance_results['maintenance_success'] = False
+        
+        return maintenance_results
+    
+    def _enrich_works_metadata(self) -> Dict[str, Any]:
+        """worksメタデータ補完"""
+        import subprocess
+        
+        result = subprocess.run([
+            'python3', 'extractors/enrich_works_metadata.py'
+        ], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)))
+        
+        if result.returncode == 0:
+            # 成功時の処理件数を出力から抽出
+            output_lines = result.stdout.split('\n')
+            enriched_count = 0
+            for line in output_lines:
+                if '件処理完了' in line:
+                    try:
+                        enriched_count = int(line.split('件処理完了')[0].split()[-1])
+                    except:
+                        pass
+            
+            return {'enriched_count': enriched_count}
+        else:
+            raise Exception(f"worksメタデータ補完失敗: {result.stderr}")
+    
+    def _update_work_publication_years(self) -> Dict[str, Any]:
+        """work_publication_year更新"""
+        import subprocess
+        
+        result = subprocess.run([
+            'python3', 'extractors/update_work_publication_year.py'
+        ], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)))
+        
+        if result.returncode == 0:
+            # 成功時の処理件数を出力から抽出
+            output_lines = result.stdout.split('\n')
+            updated_count = 0
+            for line in output_lines:
+                if '件更新' in line:
+                    try:
+                        updated_count = int(line.split('件更新')[0].split()[-1])
+                    except:
+                        pass
+            
+            return {'updated_count': updated_count}
+        else:
+            raise Exception(f"出版年更新失敗: {result.stderr}")
+    
+    def _fix_matched_text(self) -> Dict[str, Any]:
+        """matched_text修正"""
+        import sqlite3
+        
+        try:
+            conn = sqlite3.connect('data/bungo_map.db')
+            cursor = conn.cursor()
+            
+            # matched_textを対応するsentence_textで更新
+            cursor.execute("""
+                UPDATE sentence_places 
+                SET matched_text = (
+                    SELECT sentence_text 
+                    FROM sentences 
+                    WHERE sentences.sentence_id = sentence_places.sentence_id
+                )
+            """)
+            
+            fixed_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            return {'fixed_count': fixed_count}
+        except Exception as e:
+            raise Exception(f"matched_text修正失敗: {e}")
+    
     def _print_report(self, results: Dict[str, Any]):
         """レポート表示"""
         print(f"\n🎉 パイプライン完了レポート")
@@ -184,9 +328,25 @@ class BungoPipeline:
         print(f"🌍 ジオコーディング成功: {results.get('places_geocoded', 0)}件")
         print(f"📊 ジオコーディング成功率: {results.get('geocoding_success_rate', 0):.1f}%")
         
+        # メンテナンス結果
+        if 'maintenance_success' in results:
+            print(f"\n🔧 データ品質保証結果:")
+            print(f"  📝 sentence_places補完: {results.get('enriched_sentence_places', 0)}件")
+            print(f"  📚 worksメタデータ補完: {results.get('enriched_works', 0)}件")
+            print(f"  📅 出版年更新: {results.get('updated_publication_years', 0)}件")
+            print(f"  🔧 matched_text修正: {results.get('fixed_matched_texts', 0)}件")
+            print(f"  🏆 メンテナンス結果: {'成功' if results.get('maintenance_success', False) else '一部エラー'}")
+        
+        # 通常のエラー
         if results['errors']:
-            print(f"\n❌ エラー: {len(results['errors'])}件")
+            print(f"\n❌ パイプラインエラー: {len(results['errors'])}件")
             for error in results['errors']:
+                print(f"  - {error}")
+        
+        # メンテナンスエラー
+        if results.get('maintenance_errors'):
+            print(f"\n⚠️ メンテナンスエラー: {len(results['maintenance_errors'])}件")
+            for error in results['maintenance_errors']:
                 print(f"  - {error}")
 
 def main():
@@ -200,6 +360,7 @@ def main():
   python3 run_pipeline.py --author "梶井 基次郎"
   python3 run_pipeline.py --author "夏目 漱石" --works-only
   python3 run_pipeline.py --author "芥川 龍之介" --no-geocoding
+  python3 run_pipeline.py --author "太宰 治" --no-maintenance
   python3 run_pipeline.py --status "梶井 基次郎"
   
   # 地名管理
@@ -223,6 +384,7 @@ def main():
     # 実行制御
     parser.add_argument('--works-only', action='store_true', help='作品収集のみ（地名抽出なし）')
     parser.add_argument('--no-geocoding', action='store_true', help='地名抽出のみ（ジオコーディングなし）')
+    parser.add_argument('--no-maintenance', action='store_true', help='データ品質保証・メンテナンス処理をスキップ')
     
     # 地名管理機能
     parser.add_argument('--delete', nargs='+', help='指定した地名を削除')
@@ -370,11 +532,12 @@ def main():
     # 地名抽出を含むかどうか
     include_places = not args.works_only
     include_geocoding = not args.no_geocoding
+    include_maintenance = not args.no_maintenance
     
     # 処理実行
     if args.author:
         # 単一作者処理
-        pipeline.run_full_pipeline(args.author, include_places, include_geocoding)
+        pipeline.run_full_pipeline(args.author, include_places, include_geocoding, include_maintenance)
     else:
         print("❌ 処理対象作者を指定してください")
         parser.print_help()
