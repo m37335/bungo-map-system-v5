@@ -123,6 +123,79 @@ class ContextAwareGeocoder:
             "嵐山": {"地域性": "京都", "地名": "京都府京都市右京区嵐山"},
         }
         
+        # 人名・学者名データベース（高精度フィルタ用）
+        self.known_person_names = {
+            # 植物学者・学者
+            '松村', '松村任三', '牧野', '牧野富太郎', '湯川', '湯川秀樹',
+            '朝比奈', '朝比奈泰彦', '木村', '木村陽二郎', '原', '原寛',
+            '服部', '服部広太郎', '中井', '中井猛之進', '小泉', '小泉源一',
+            
+            # 文豪・作家（作品中に言及される可能性）
+            '夏目', '夏目漱石', '芥川', '芥川龍之介', '太宰', '太宰治',
+            '川端', '川端康成', '三島', '三島由紀夫', '谷崎', '谷崎潤一郎',
+            
+            # 一般的な姓
+            '田中', '佐藤', '鈴木', '高橋', '渡辺', '伊藤', '山田',
+            '中村', '小林', '加藤', '吉田', '山本', '佐々木', '山口',
+            '松本', '井上', '木村', '林', '清水', '山崎', '池田',
+        }
+        
+        # 学術・専門用語データベース
+        self.academic_terms = {
+            # 植物学用語
+            '語原', '語源', '学名', '分類', '標本', '観察', '記録',
+            '図鑑', '植物', '花', '葉', '茎', '根', '種子', '果実',
+            '開花', '結実', '発芽', '生育', '分布', '生息', '自生',
+            
+            # 一般学術用語
+            '研究', '調査', '実験', '観測', '分析', '考察', '論文',
+            '報告', '発表', '講演', '会議', '学会', '協会', '団体',
+            
+            # 医学・科学用語
+            '病原', '症状', '治療', '診断', '医学', '薬学',
+            
+            # 神話・宗教用語
+            '牧羊神', '多分神',
+            
+            # 抽象概念・成句
+            '理論', '概念', '思想', '哲学', '主義', '方法', '技術',
+            '進退維谷', '最上',  # 最上級・成句として
+        }
+        
+        # 一般名詞データベース
+        self.general_nouns = {
+            # 時間・状態・量詞
+            '今日', '昨日', '明日', '今朝', '夕方', '深夜', '早朝',
+            '沢山', '大勢', '少数', '多数', '全部', '一部', '半分',
+            '時間', '時期', '期間', '瞬間', '永久', '一時',
+            
+            # 動作・行為
+            '移動', '到着', '出発', '帰宅', '外出', '散歩', '旅行',
+            '行動', '動作', '作業', '活動', '運動', '労働',
+            
+            # 建物・施設の一般名称
+            '美容院', '理髪店', '病院', '学校', '図書館', '郵便局',
+            '銀行', '会社', '工場', '店舗', '商店', '市場',
+            
+            # 自然・地形の一般名称
+            '山野', '田野', '野原', '草原', '荒野', '平野',
+            '水辺', '川辺', '海辺', '岸辺', '湖畔', '池畔',
+            '森林', '竹林', '松林', '雑木林',
+            
+            # 抽象的概念
+            '問題', '課題', '困難', '障害', '原因', '結果', '影響',
+            '目的', '手段', '方法', '方式', '方向', '状況', '状態',
+            '性質', '特徴', '性格', '個性', '人格', '品格',
+            
+            # 感情・心理
+            '気持', '感情', '心情', '気分', '心境', '感覚',
+            '印象', '感想', '意見', '考え', '思考', '判断',
+            
+            # 形容・程度
+            '程度', '具合', '調子', '様子', '様相', '模様',
+            '最上', '最高', '最低', '最大', '最小', '最多',
+        }
+        
         # 実証済み高信頼度都市データベース（0.92-0.98信頼度）
         self.high_confidence_cities = {
             # 東京詳細地名（信頼度0.95）
@@ -248,8 +321,42 @@ class ContextAwareGeocoder:
         }
     
     def analyze_context(self, place_name: str, sentence: str, before_text: str = "", after_text: str = "") -> ContextAnalysisResult:
-        """文脈分析を実行"""
+        """文脈分析を実行（高精度フィルタ統合版）"""
         full_context = f"{before_text} {sentence} {after_text}"
+        
+        # 🚀 高精度フィルタ: 人名・学術用語・一般名詞チェック
+        if place_name in self.known_person_names:
+            return ContextAnalysisResult(
+                is_place_name=False,
+                confidence=0.95,
+                place_type="人名",
+                historical_context="",
+                geographic_context="",
+                reasoning=f"人名データベースに登録済み: {place_name}",
+                suggested_location=None
+            )
+        
+        if place_name in self.academic_terms:
+            return ContextAnalysisResult(
+                is_place_name=False,
+                confidence=0.90,
+                place_type="学術用語",
+                historical_context="",
+                geographic_context="",
+                reasoning=f"学術・専門用語として識別: {place_name}",
+                suggested_location=None
+            )
+        
+        if place_name in self.general_nouns:
+            return ContextAnalysisResult(
+                is_place_name=False,
+                confidence=0.85,
+                place_type="一般名詞",
+                historical_context="",
+                geographic_context="",
+                reasoning=f"一般名詞として識別: {place_name}",
+                suggested_location=None
+            )
         
         # 地名指標のスコア
         place_score = 0
@@ -915,6 +1022,213 @@ class ContextAwareGeocoder:
         else:
             return "保持推奨: 地名として適切に使用"
 
+    def ai_mass_verification(self, limit: Optional[int] = None, confidence_threshold: float = 0.7) -> Dict[str, any]:
+        """AI大量検証システム - 既存地名の再評価"""
+        if not self.openai_enabled:
+            return {"error": "OpenAI APIが利用できません"}
+        
+        conn = sqlite3.connect('data/bungo_map.db')
+        cursor = conn.cursor()
+        
+        # 検証対象の地名を取得（使用頻度が低い・未検証の地名を優先）
+        query = '''
+            SELECT p.place_id, p.place_name, p.confidence, p.source_system,
+                   COUNT(sp.sentence_id) as usage_count,
+                   GROUP_CONCAT(s.sentence_text, '|||') as all_sentences
+            FROM places p
+            JOIN sentence_places sp ON p.place_id = sp.place_id
+            JOIN sentences s ON sp.sentence_id = s.sentence_id
+            WHERE p.verification_status IS NULL OR p.verification_status != 'ai_verified'
+            GROUP BY p.place_id, p.place_name
+            ORDER BY usage_count ASC, p.confidence ASC
+        '''
+        
+        if limit:
+            query += f' LIMIT {limit}'
+            
+        cursor.execute(query)
+        places_to_verify = cursor.fetchall()
+        
+        verification_results = {
+            'verified_places': [],
+            'deletion_candidates': [],
+            'total_processed': 0,
+            'ai_errors': 0
+        }
+        
+        logger.info(f"🤖 AI大量検証開始: {len(places_to_verify)}件")
+        
+        for place_id, place_name, confidence, source_system, usage_count, all_sentences in places_to_verify:
+            try:
+                sentences = all_sentences.split('|||') if all_sentences else []
+                
+                # 複数文脈でのAI分析
+                ai_analyses = []
+                for sentence in sentences[:5]:  # 最大5文まで
+                    ai_result = self._enhanced_ai_analysis(place_name, sentence)
+                    if ai_result:
+                        ai_analyses.append(ai_result)
+                
+                if not ai_analyses:
+                    verification_results['ai_errors'] += 1
+                    continue
+                
+                # 総合判定
+                overall_verdict = self._calculate_overall_verdict(ai_analyses)
+                
+                place_result = {
+                    'place_id': place_id,
+                    'place_name': place_name,
+                    'usage_count': usage_count,
+                    'current_confidence': confidence,
+                    'ai_analyses': ai_analyses,
+                    'overall_verdict': overall_verdict,
+                    'recommendation': overall_verdict['recommendation']
+                }
+                
+                # 削除候補の判定
+                if overall_verdict['is_valid'] == False and overall_verdict['confidence'] >= confidence_threshold:
+                    verification_results['deletion_candidates'].append(place_result)
+                    logger.info(f"❌ 削除候補: {place_name} (AI確信度: {overall_verdict['confidence']:.2f})")
+                else:
+                    verification_results['verified_places'].append(place_result)
+                    # データベースに検証済みマークを付与
+                    cursor.execute(
+                        "UPDATE places SET verification_status = 'ai_verified', ai_confidence = ? WHERE place_id = ?",
+                        (overall_verdict['confidence'], place_id)
+                    )
+                    logger.info(f"✅ 検証済み: {place_name} (AI確信度: {overall_verdict['confidence']:.2f})")
+                
+                verification_results['total_processed'] += 1
+                
+            except Exception as e:
+                logger.error(f"AI検証エラー ({place_name}): {str(e)}")
+                verification_results['ai_errors'] += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return verification_results
+
+    def _enhanced_ai_analysis(self, place_name: str, sentence: str) -> Optional[Dict[str, any]]:
+        """強化されたAI分析 - より詳細な判定"""
+        if not self.openai_enabled:
+            return None
+            
+        try:
+            prompt = f"""
+以下の文章中の「{place_name}」について、地名としての妥当性を詳細に分析してください。
+
+文章: {sentence}
+
+以下の観点から総合的に判断し、JSON形式で回答してください：
+
+{{
+    "is_place_name": true/false,
+    "confidence": 0.0-1.0,
+    "place_type": "都市名/地域名/歴史地名/自然地名/人名/学術用語/一般名詞/その他",
+    "reasoning": "詳細な判断理由",
+    "context_clues": ["文脈手がかりのリスト"],
+    "alternative_interpretation": "他の解釈の可能性",
+    "literary_context": "文学作品での使用文脈"
+}}
+
+判断基準：
+1. 文中での文法的役割（主語/目的語/修飾語等）
+2. 周辺語句との関係性
+3. 文豪作品での典型的な使用パターン
+4. 地名として使われる際の文脈的特徴
+5. 人名・一般名詞との区別
+
+特に注意点：
+- 植物学者・文豪の人名は地名ではない
+- 「沢山」「様子」等の一般名詞は地名ではない
+- 「語原」「病原」等の学術用語は地名ではない
+- 文脈上明らかに人物を指す場合は人名判定
+"""
+
+            response = self.openai_client.chat.completions.create(
+                model=os.getenv('OPENAI_MODEL', 'gpt-4'),  # より高性能なモデルを使用
+                messages=[
+                    {'role': 'system', 'content': '日本文学・地理・言語学の専門家として、文豪作品中の地名を正確に判別してください。文脈を深く理解し、誤判定を避けることが重要です。'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                max_tokens=500,
+                temperature=0.1
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # JSON解析
+            try:
+                if '```json' in response_text:
+                    json_start = response_text.find('```json') + 7
+                    json_end = response_text.find('```', json_start)
+                    response_text = response_text[json_start:json_end].strip()
+                elif '```' in response_text:
+                    json_start = response_text.find('```') + 3
+                    json_end = response_text.find('```', json_start)
+                    response_text = response_text[json_start:json_end].strip()
+                    
+                result = json.loads(response_text)
+                
+                if isinstance(result, dict) and 'is_place_name' in result:
+                    return result
+                else:
+                    logger.warning(f"AI応答形式エラー: {response_text}")
+                    return None
+                    
+            except json.JSONDecodeError:
+                logger.warning(f"AI応答JSON解析エラー: {response_text}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"強化AI分析エラー: {str(e)}")
+            return None
+
+    def _calculate_overall_verdict(self, ai_analyses: List[Dict[str, any]]) -> Dict[str, any]:
+        """複数のAI分析結果から総合判定を計算"""
+        if not ai_analyses:
+            return {'is_valid': False, 'confidence': 0.0, 'recommendation': '不明'}
+        
+        # 地名判定の集計
+        place_votes = sum(1 for analysis in ai_analyses if analysis.get('is_place_name', False))
+        total_votes = len(ai_analyses)
+        
+        # 信頼度の平均
+        avg_confidence = sum(analysis.get('confidence', 0.0) for analysis in ai_analyses) / total_votes  
+        
+        # 総合判定
+        is_valid = place_votes / total_votes >= 0.5
+        
+        if place_votes == 0:
+            recommendation = "削除推奨"
+            final_confidence = avg_confidence
+        elif place_votes / total_votes < 0.3:
+            recommendation = "削除検討"
+            final_confidence = avg_confidence * 0.8
+        elif place_votes / total_votes < 0.7:
+            recommendation = "要再検討"
+            final_confidence = avg_confidence * 0.9
+        else:
+            recommendation = "保持推奨"
+            final_confidence = avg_confidence
+        
+        # 判定理由の統合
+        reasoning_summary = []
+        place_types = [analysis.get('place_type', '') for analysis in ai_analyses]
+        most_common_type = max(set(place_types), key=place_types.count) if place_types else '不明'
+        
+        return {
+            'is_valid': is_valid,
+            'confidence': final_confidence,
+            'recommendation': recommendation,
+            'place_name_ratio': place_votes / total_votes,
+            'most_common_type': most_common_type,
+            'analysis_count': total_votes,
+            'detailed_analyses': ai_analyses
+        }
+
 def main():
     """メイン処理"""
     import argparse
@@ -926,6 +1240,9 @@ def main():
     parser.add_argument('--cleanup-preview', action='store_true', help='無効地名の削除候補を表示（実行なし）')
     parser.add_argument('--delete', nargs='+', help='指定した地名を削除')
     parser.add_argument('--analyze', type=str, help='指定した地名の使用状況を詳細分析')
+    parser.add_argument('--ai-verify', action='store_true', help='AI大量検証を実行')
+    parser.add_argument('--ai-verify-limit', type=int, default=20, help='AI検証する地名数の上限（デフォルト: 20）')
+    parser.add_argument('--confidence-threshold', type=float, default=0.7, help='削除候補とする信頼度の閾値（デフォルト: 0.7）')
     
     args = parser.parse_args()
     
@@ -1026,6 +1343,54 @@ def main():
         
         if deletion_result["not_found_places"]:
             print(f"⚠️ 見つからなかった地名: {', '.join(deletion_result['not_found_places'])}")
+        
+        return
+    
+    # AI大量検証
+    if args.ai_verify:
+        print(f"\n=== 🤖 AI大量検証開始 (上限: {args.ai_verify_limit}件, 信頼度閾値: {args.confidence_threshold}) ===")
+        verification_result = geocoder.ai_mass_verification(
+            limit=args.ai_verify_limit, 
+            confidence_threshold=args.confidence_threshold
+        )
+        
+        if "error" in verification_result:
+            print(f"❌ {verification_result['error']}")
+            return
+        
+        print(f"\n📊 AI検証結果:")
+        print(f"処理済み: {verification_result['total_processed']}件")
+        print(f"検証済み: {len(verification_result['verified_places'])}件")
+        print(f"削除候補: {len(verification_result['deletion_candidates'])}件")
+        print(f"AIエラー: {verification_result['ai_errors']}件")
+        
+        if verification_result['deletion_candidates']:
+            print(f"\n🗑️ 削除候補地名:")
+            for candidate in verification_result['deletion_candidates'][:10]:  # 上位10件表示
+                verdict = candidate['overall_verdict']
+                print(f"   ❌ {candidate['place_name']:12} (使用{candidate['usage_count']:2d}回)")
+                print(f"      AI判定: {verdict['most_common_type']} | 地名率: {verdict['place_name_ratio']:.2f}")
+                print(f"      推奨: {verdict['recommendation']} | 確信度: {verdict['confidence']:.2f}")
+                if verdict['detailed_analyses']:
+                    first_analysis = verdict['detailed_analyses'][0]
+                    print(f"      理由: {first_analysis.get('reasoning', '不明')[:100]}...")
+                print()
+            
+            if len(verification_result['deletion_candidates']) > 10:
+                print(f"   ... 他 {len(verification_result['deletion_candidates']) - 10}件")
+            
+            # 削除確認
+            print("💡 これらの地名を削除しますか？ (y/N): ", end="")
+            try:
+                user_input = input().strip().lower()
+                if user_input in ['y', 'yes']:
+                    delete_names = [candidate['place_name'] for candidate in verification_result['deletion_candidates']]
+                    deletion_result = geocoder.delete_invalid_places(delete_names, "AI検証による削除")
+                    print(f"✅ {deletion_result['total_deleted']}件の地名を削除しました")
+                else:
+                    print("🔄 削除をキャンセルしました")
+            except (KeyboardInterrupt, EOFError):
+                print("\n🔄 削除をキャンセルしました")
         
         return
     

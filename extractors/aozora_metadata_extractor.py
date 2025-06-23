@@ -74,7 +74,7 @@ class AozoraMetadataExtractor:
             return {}
     
     def _extract_publication_year(self, soup: BeautifulSoup) -> Optional[int]:
-        """初出年を抽出"""
+        """初出年を抽出（改良版：複数パターン対応）"""
         try:
             # 作品データテーブルを探す
             tables = soup.find_all('table', {'summary': '作品データ'})
@@ -87,27 +87,67 @@ class AozoraMetadataExtractor:
                         header = cells[0].get_text(strip=True)
                         content = cells[1].get_text(strip=True)
                         
-                        if '初出' in header:
-                            # パターン1: "「詩・現実」1930（昭和5）年6月"
-                            year_match = re.search(r'(\d{4}).*?年', content)
-                            if year_match:
-                                year = int(year_match.group(1))
-                                print(f"✅ 初出年抽出: {year}年 ({content})")
+                        # 複数の年情報パターンを試行
+                        if any(keyword in header for keyword in ['初出', '発表', '発行', '出版']):
+                            year = self._extract_year_from_text(content)
+                            if year:
+                                print(f"✅ {header}から年抽出: {year}年 ({content[:50]}...)")
                                 return year
-                            
-                            # パターン2: 昭和年号のみの場合
-                            showa_match = re.search(r'昭和(\d+)年', content)
-                            if showa_match:
-                                showa_year = int(showa_match.group(1))
-                                year = 1925 + showa_year  # 昭和1年=1926年
-                                print(f"✅ 昭和年号から変換: 昭和{showa_year}年 → {year}年")
-                                return year
+            
+            # 作品データテーブルが見つからない場合、ページ全体から抽出
+            print("⚠️ 作品データテーブルが見つかりません。ページ全体を検索...")
+            page_text = soup.get_text()
+            year = self._extract_year_from_text(page_text[:1000])  # 最初の1000文字のみ
+            if year:
+                print(f"✅ ページ全体から年抽出: {year}年")
+                return year
             
             return None
             
         except Exception as e:
             print(f"⚠️ 初出年抽出エラー: {e}")
             return None
+    
+    def _extract_year_from_text(self, text: str) -> Optional[int]:
+        """テキストから年を抽出（改良版：多様なパターン対応）"""
+        # パターン1: 西暦年（1900-2100）
+        year_patterns = [
+            r'(\d{4})年',  # 1930年
+            r'(\d{4})（.*?）年',  # 1930（昭和5）年
+            r'「.*?」(\d{4})年',  # 「雑誌名」1930年
+            r'『.*?』(\d{4})年',  # 『雑誌名』1930年
+        ]
+        
+        for pattern in year_patterns:
+            matches = re.findall(pattern, text)
+            for match in matches:
+                try:
+                    year = int(match)
+                    if 1800 <= year <= 2100:  # 妥当な年の範囲
+                        return year
+                except ValueError:
+                    continue
+        
+        # パターン2: 年号変換
+        era_patterns = [
+            (r'明治(\d+)年', 1867),  # 明治元年=1868年
+            (r'大正(\d+)年', 1911),  # 大正元年=1912年
+            (r'昭和(\d+)年', 1925),  # 昭和元年=1926年
+        ]
+        
+        for pattern, base_year in era_patterns:
+            matches = re.findall(pattern, text)
+            for match in matches:
+                try:
+                    era_year = int(match)
+                    if era_year > 0:  # 0年は無効
+                        year = base_year + era_year
+                        if 1800 <= year <= 2100:
+                            return year
+                except ValueError:
+                    continue
+        
+        return None
     
     def _extract_input_person(self, soup: BeautifulSoup) -> Optional[str]:
         """入力者を抽出"""

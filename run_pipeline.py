@@ -126,10 +126,12 @@ class BungoPipeline:
             # ステップ3: データ品質保証（新機能）
             if include_maintenance:
                 print("\n🔄 ステップ3: データ品質保証・メンテナンス...")
+                print("  👤 Wikipedia作者情報自動補完")
                 print("  📝 sentence_places作者・作品情報補完")
                 print("  📚 worksメタデータ自動補完")
                 print("  📅 出版年情報更新")
                 print("  🔧 matched_text文全体修正")
+                print("  🗺️ 地名重複統合処理")
                 
                 step3_result = self._run_data_quality_maintenance()
                 results.update(step3_result)
@@ -191,18 +193,70 @@ class BungoPipeline:
         """ジオコーディング統計取得"""
         return self.context_aware_geocoder.get_geocoding_statistics()
     
+    def ai_verify_places(self, limit: int = 20, confidence_threshold: float = 0.7, auto_delete: bool = False) -> Dict[str, Any]:
+        """AI大量検証実行"""
+        print(f"🤖 AI大量検証開始 (上限: {limit}件, 信頼度閾値: {confidence_threshold})")
+        result = self.context_aware_geocoder.ai_mass_verification(limit, confidence_threshold)
+        
+        if "error" in result:
+            print(f"❌ {result['error']}")
+            return result
+        
+        print(f"📊 AI検証結果:")
+        print(f"処理済み: {result['total_processed']}件")
+        print(f"検証済み: {len(result['verified_places'])}件")
+        print(f"削除候補: {len(result['deletion_candidates'])}件")
+        print(f"AIエラー: {result['ai_errors']}件")
+        
+        if result['deletion_candidates']:
+            print(f"\n🗑️ 削除候補地名:")
+            for candidate in result['deletion_candidates'][:10]:  # 上位10件表示
+                verdict = candidate['overall_verdict']
+                print(f"   ❌ {candidate['place_name']:12} (使用{candidate['usage_count']:2d}回)")
+                print(f"      AI判定: {verdict['most_common_type']} | 地名率: {verdict['place_name_ratio']:.2f}")
+                print(f"      推奨: {verdict['recommendation']} | 確信度: {verdict['confidence']:.2f}")
+                if verdict['detailed_analyses']:
+                    first_analysis = verdict['detailed_analyses'][0]
+                    print(f"      理由: {first_analysis.get('reasoning', '不明')[:100]}...")
+                print()
+            
+            if len(result['deletion_candidates']) > 10:
+                print(f"   ... 他 {len(result['deletion_candidates']) - 10}件")
+            
+            # 自動削除または手動確認
+            if auto_delete:
+                delete_names = [candidate['place_name'] for candidate in result['deletion_candidates']]
+                deletion_result = self.delete_invalid_places(delete_names, "AI検証による自動削除")
+                print(f"✅ {deletion_result['total_deleted']}件の地名を自動削除しました")
+                result['auto_deleted'] = deletion_result['total_deleted']
+            else:
+                print("💡 削除を実行するには --ai-verify-delete オプションを使用してください")
+                result['auto_deleted'] = 0
+        
+        return result
+    
     def _run_data_quality_maintenance(self) -> Dict[str, Any]:
         """データ品質保証・メンテナンス処理"""
         maintenance_results = {
             'maintenance_success': True,
+            'wikipedia_enriched_authors': 0,
             'enriched_sentence_places': 0,
             'enriched_works': 0,
             'updated_publication_years': 0,
             'fixed_matched_texts': 0,
+            'places_merged': 0,
             'maintenance_errors': []
         }
         
         try:
+            # 0. Wikipedia作者情報補完（新規追加）
+            try:
+                wikipedia_result = self._enrich_wikipedia_author_info()
+                maintenance_results['wikipedia_enriched_authors'] = wikipedia_result.get('enriched_count', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"Wikipedia作者情報補完エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+            
             # 1. sentence_places補完
             try:
                 enrichment_result = self.sentence_places_enricher.run_full_enrichment()
@@ -233,6 +287,14 @@ class BungoPipeline:
                 maintenance_results['fixed_matched_texts'] = matched_text_result.get('fixed_count', 0)
             except Exception as e:
                 maintenance_results['maintenance_errors'].append(f"matched_text修正エラー: {e}")
+                maintenance_results['maintenance_success'] = False
+            
+            # 5. 地名重複統合（新規追加）
+            try:
+                place_merge_result = self._merge_duplicate_places()
+                maintenance_results['places_merged'] = place_merge_result.get('places_merged', 0)
+            except Exception as e:
+                maintenance_results['maintenance_errors'].append(f"地名重複統合エラー: {e}")
                 maintenance_results['maintenance_success'] = False
                 
         except Exception as e:
@@ -313,6 +375,48 @@ class BungoPipeline:
         except Exception as e:
             raise Exception(f"matched_text修正失敗: {e}")
     
+    def _enrich_wikipedia_author_info(self) -> Dict[str, Any]:
+        """Wikipedia作者情報補完"""
+        try:
+            # 処理対象作者を特定（最新処理されたが生年・没年・Wikipedia URLが空の作者）
+            missing_info = self.wikipedia_enricher.preview_missing_info()
+            recent_authors = missing_info.get('missing_authors', [])
+            
+            if not recent_authors:
+                return {
+                    'enriched_count': 0,
+                    'errors': []
+                }
+            
+            # 最近処理された作者のみに絞る（最新の3作者程度）
+            target_authors = [author['author_name'] for author in recent_authors[:3]]
+            
+            enrichment_result = self.wikipedia_enricher.enrich_specific_authors(target_authors)
+            
+            return {
+                'enriched_count': enrichment_result.get('success_count', 0),
+                'errors': enrichment_result.get('errors', [])
+            }
+        except Exception as e:
+            raise Exception(f"Wikipedia作者情報補完失敗: {e}")
+    
+    def _merge_duplicate_places(self) -> Dict[str, Any]:
+        """地名重複統合処理"""
+        from extractors.place_master_manager import PlaceMasterManager
+        
+        try:
+            place_manager = PlaceMasterManager()
+            place_manager.add_master_place_id_column()
+            merge_result = place_manager.merge_duplicate_places()
+            
+            return {
+                'places_merged': merge_result.get('places_merged', 0),
+                'duplicates_found': merge_result.get('duplicates_found', 0),
+                'errors': merge_result.get('errors', [])
+            }
+        except Exception as e:
+            raise Exception(f"地名重複統合失敗: {e}")
+    
     def _print_report(self, results: Dict[str, Any]):
         """レポート表示"""
         print(f"\n🎉 パイプライン完了レポート")
@@ -331,10 +435,12 @@ class BungoPipeline:
         # メンテナンス結果
         if 'maintenance_success' in results:
             print(f"\n🔧 データ品質保証結果:")
+            print(f"  👤 Wikipedia作者情報補完: {results.get('wikipedia_enriched_authors', 0)}件")
             print(f"  📝 sentence_places補完: {results.get('enriched_sentence_places', 0)}件")
             print(f"  📚 worksメタデータ補完: {results.get('enriched_works', 0)}件")
             print(f"  📅 出版年更新: {results.get('updated_publication_years', 0)}件")
             print(f"  🔧 matched_text修正: {results.get('fixed_matched_texts', 0)}件")
+            print(f"  🗺️ 地名重複統合: {results.get('places_merged', 0)}件")
             print(f"  🏆 メンテナンス結果: {'成功' if results.get('maintenance_success', False) else '一部エラー'}")
         
         # 通常のエラー
@@ -374,6 +480,11 @@ def main():
   python3 run_pipeline.py --enrich-preview
   python3 run_pipeline.py --enrich-authors
   python3 run_pipeline.py --enrich-specific "夏目 漱石" "芥川 龍之介"
+  
+  # AI検証機能
+  python3 run_pipeline.py --ai-verify
+  python3 run_pipeline.py --ai-verify-delete --ai-verify-limit 50
+  python3 run_pipeline.py --ai-verify --ai-confidence-threshold 0.8
         """
     )
     
@@ -397,6 +508,12 @@ def main():
     parser.add_argument('--enrich-authors', action='store_true', help='Wikipedia作者情報自動補完（全作者）')
     parser.add_argument('--enrich-preview', action='store_true', help='作者情報不足状況をプレビュー表示')
     parser.add_argument('--enrich-specific', nargs='+', help='指定作者のみ情報補完（複数可）')
+    
+    # AI検証機能
+    parser.add_argument('--ai-verify', action='store_true', help='AI大量検証を実行')
+    parser.add_argument('--ai-verify-delete', action='store_true', help='AI検証で削除候補を自動削除')
+    parser.add_argument('--ai-verify-limit', type=int, default=20, help='AI検証する地名数の上限（デフォルト: 20）')
+    parser.add_argument('--ai-confidence-threshold', type=float, default=0.7, help='AI検証の信頼度閾値（デフォルト: 0.7）')
     
     args = parser.parse_args()
     
@@ -522,6 +639,16 @@ def main():
         
         if deletion_result["not_found_places"]:
             print(f"⚠️ 見つからなかった地名: {', '.join(deletion_result['not_found_places'])}")
+        return
+    
+    # AI検証機能
+    if args.ai_verify or args.ai_verify_delete:
+        print(f"=== 🤖 AI大量検証 (上限: {args.ai_verify_limit}件, 信頼度閾値: {args.ai_confidence_threshold}) ===")
+        ai_result = pipeline.ai_verify_places(
+            limit=args.ai_verify_limit,
+            confidence_threshold=args.ai_confidence_threshold,
+            auto_delete=args.ai_verify_delete
+        )
         return
     
     # 処理状況確認

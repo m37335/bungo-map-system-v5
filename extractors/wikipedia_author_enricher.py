@@ -49,98 +49,137 @@ class WikipediaAuthorEnricher:
         }
         
     def search_author_wikipedia(self, author_name: str) -> Optional[Dict]:
-        """作者のWikipedia情報を詳細検索"""
+        """作者のWikipedia情報を詳細検索（改良版）"""
         try:
             print(f"🔍 {author_name} の情報を検索中...")
             
-            # Wikipedia検索
-            page = wikipedia.page(author_name)
+            # より具体的な検索キーワードを試す
+            search_keywords = [
+                f"{author_name} 植物学者",  # 専門分野を含める
+                f"{author_name} 博士",
+                f"{author_name} 学者",
+                author_name
+            ]
             
-            # 基本情報抽出
-            extract = page.summary
-            birth_year, death_year = self._extract_life_years(extract, page.content)
+            for keyword in search_keywords:
+                try:
+                    # Wikipedia検索
+                    page = wikipedia.page(keyword)
+                    
+                    # 基本情報抽出
+                    extract = page.summary
+                    birth_year, death_year = self._extract_life_years(extract, page.content)
+                    
+                    # 妥当性チェック：明治・大正・昭和期の人物かどうか
+                    if birth_year and (1800 <= birth_year <= 1950):
+                        return {
+                            'title': page.title,
+                            'url': page.url,
+                            'extract': extract[:500],  # 要約（500文字）
+                            'content': page.content,
+                            'birth_year': birth_year,
+                            'death_year': death_year,
+                            'search_keyword': keyword
+                        }
+                    
+                except wikipedia.exceptions.DisambiguationError as e:
+                    # 曖昧さ回避ページの場合、適切な候補を選択
+                    best_option = self._select_best_disambiguation_option(author_name, e.options)
+                    if best_option:
+                        try:
+                            page = wikipedia.page(best_option)
+                            extract = page.summary
+                            birth_year, death_year = self._extract_life_years(extract, page.content)
+                            
+                            # 妥当性チェック
+                            if birth_year and (1800 <= birth_year <= 1950):
+                                return {
+                                    'title': page.title,
+                                    'url': page.url,
+                                    'extract': extract[:500],
+                                    'content': page.content,
+                                    'birth_year': birth_year,
+                                    'death_year': death_year,
+                                    'search_keyword': keyword,
+                                    'disambiguation_option': best_option
+                                }
+                        except Exception as e2:
+                            print(f"⚠️ 曖昧さ回避候補エラー ({best_option}): {e2}")
+                            continue
+                    
+                except wikipedia.exceptions.PageError:
+                    continue  # 次のキーワードを試す
+                    
+                except Exception as e:
+                    print(f"⚠️ 検索キーワード '{keyword}' でエラー: {e}")
+                    continue
             
-            return {
-                'title': page.title,
-                'url': page.url,
-                'extract': extract[:500],  # 要約（500文字）
-                'content': page.content,
-                'birth_year': birth_year,
-                'death_year': death_year
-            }
-            
-        except wikipedia.exceptions.DisambiguationError as e:
-            # 曖昧さ回避ページの場合、最初の候補を試す
-            try:
-                page = wikipedia.page(e.options[0])
-                extract = page.summary
-                birth_year, death_year = self._extract_life_years(extract, page.content)
-                
-                return {
-                    'title': page.title,
-                    'url': page.url,
-                    'extract': extract[:500],
-                    'content': page.content,
-                    'birth_year': birth_year,
-                    'death_year': death_year
-                }
-            except Exception as e2:
-                print(f"⚠️ 曖昧さ回避エラー ({author_name}): {e2}")
-                
-        except wikipedia.exceptions.PageError:
-            print(f"⚠️ ページが見つかりません: {author_name}")
+            print(f"⚠️ {author_name} の適切なWikipediaページが見つかりませんでした")
+            return None
             
         except Exception as e:
             print(f"⚠️ Wikipedia検索エラー ({author_name}): {e}")
-            
-        return None
+            return None
+    
+    def _select_best_disambiguation_option(self, author_name: str, options: List[str]) -> Optional[str]:
+        """曖昧さ回避ページから最適な選択肢を選ぶ"""
+        # 植物学者、博士、学者などのキーワードが含まれる選択肢を優先
+        priority_keywords = ['植物学者', '博士', '学者', '研究者', '教授', '明治', '大正', '昭和']
+        
+        for keyword in priority_keywords:
+            for option in options:
+                if keyword in option:
+                    return option
+        
+        # キーワードが見つからない場合は最初の選択肢
+        return options[0] if options else None
     
     def _extract_life_years(self, summary: str, content: str) -> Tuple[Optional[int], Optional[int]]:
         """テキストから生年・没年を抽出（改良版）"""
-        # より多様なパターンに対応
-        text = summary + " " + content[:2000]  # 最初の部分のみ使用
+        # summaryを優先的に使用（より正確）
+        text = summary[:1000] + " " + content[:1000]
         
-        # (年号 - 年号) パターンを最優先で探す
+        # 最も確実なパターンから順に試す
+        # パターン1: 1862年5月22日〈文久2年4月24日〉 - 1957年〈昭和32年〉1月18日 形式
         life_span_patterns = [
-            r'、(\d{4})年〈.*?〉.*?-.*?(\d{4})年〈.*?〉',  # 、1909年〈明治42年〉6月19日 - 1948年〈昭和23年〉 形式
-            r'（(\d{4})年.*?-.*?(\d{4})年.*?）',
-            r'(\d{4})年.*?-.*?(\d{4})年',
+            r'(\d{4})年.*?〈.*?〉.*?-\s*(\d{4})年',  # 牧野富太郎の形式
+            r'(\d{4})年.*?月.*?日.*?-\s*(\d{4})年.*?月.*?日',  # 詳細日付形式
+            r'（(\d{4})年.*?-.*?(\d{4})年.*?）',  # 括弧内形式
+            r'、(\d{4})年.*?-.*?(\d{4})年',  # 冒頭形式
+            r'(\d{4})年.*?-.*?(\d{4})年',  # 基本形式
         ]
         
-        for pattern in life_span_patterns:
+        for i, pattern in enumerate(life_span_patterns):
             life_match = re.search(pattern, text)
             if life_match:
                 birth_year = int(life_match.group(1))
                 death_year = int(life_match.group(2))
-                return birth_year, death_year
+                
+                # 妥当性チェック：近世〜近代の人物
+                if 1800 <= birth_year <= 1950 and 1850 <= death_year <= 2000 and birth_year < death_year:
+                    return birth_year, death_year
+                else:
+                    continue
         
-        # 個別パターンで探す
+        # 個別パターンで探す（フォールバック）
         birth_patterns = [
+            r'(\d{4})年\d+月\d+日〈',  # 1862年5月22日〈 形式
             r'（(\d{4})年.*?月.*?日.*?-',  # (1901年2月17日 - 形式
-            r'（(\d{4})年.*?-',  # (1901年 - 形式
-            r'(\d{4})年.*?月.*?日.*?生',
-            r'(\d{4})年.*?生まれ',
-            r'生年.*?(\d{4})年',
-            r'(\d{4})年.*?誕生',
-            r'明治(\d+)年.*?生',  # 明治年号
-            r'大正(\d+)年.*?生',  # 大正年号
-            r'昭和(\d+)年.*?生',  # 昭和年号
+            r'、(\d{4})年.*?月.*?日',  # 、1862年5月22日 形式
         ]
         
         death_patterns = [
-            r'-.*?(\d{4})年.*?月.*?日.*?）',  # - 1932年3月24日） 形式
-            r'-.*?(\d{4})年.*?）',  # - 1932年） 形式
-            r'(\d{4})年.*?月.*?日.*?没',
-            r'(\d{4})年.*?死去',
-            r'没年.*?(\d{4})年',
-            r'(\d{4})年.*?逝去',
-            r'昭和(\d+)年.*?没',  # 昭和年号
-            r'大正(\d+)年.*?没',  # 大正年号
-            r'明治(\d+)年.*?没',  # 明治年号
+            r'-\s*(\d{4})年〈.*?〉.*?月.*?日',  # - 1957年〈昭和32年〉1月18日 形式
+            r'-.*?(\d{4})年.*?月.*?日',  # - 1932年3月24日 形式
         ]
         
         birth_year = self._extract_year_from_patterns(text, birth_patterns)
         death_year = self._extract_year_from_patterns(text, death_patterns)
+        
+        # 最終妥当性チェック
+        if birth_year and death_year:
+            if 1800 <= birth_year <= 1950 and 1850 <= death_year <= 2000 and birth_year < death_year:
+                return birth_year, death_year
         
         return birth_year, death_year
     
