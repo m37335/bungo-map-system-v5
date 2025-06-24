@@ -15,9 +15,10 @@ import json
 from datetime import datetime
 import sys
 import os
+import argparse
 
 # パス設定
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 from database.manager import DatabaseManager
 
@@ -49,16 +50,20 @@ class WikipediaAuthorEnricher:
         }
         
     def search_author_wikipedia(self, author_name: str) -> Optional[Dict]:
-        """作者のWikipedia情報を詳細検索（改良版）"""
+        """作者のWikipedia情報を詳細検索（文豪特化版）"""
         try:
             print(f"🔍 {author_name} の情報を検索中...")
             
-            # より具体的な検索キーワードを試す
+            # 文豪向けの検索キーワード（優先順位順）
             search_keywords = [
-                f"{author_name} 植物学者",  # 専門分野を含める
-                f"{author_name} 博士",
-                f"{author_name} 学者",
-                author_name
+                author_name,  # 基本の作家名を最優先
+                f"{author_name} 作家",
+                f"{author_name} 小説家", 
+                f"{author_name} 文学者",
+                f"{author_name} 詩人",
+                f"{author_name} 明治",
+                f"{author_name} 大正",
+                f"{author_name} 昭和"
             ]
             
             for keyword in search_keywords:
@@ -70,8 +75,8 @@ class WikipediaAuthorEnricher:
                     extract = page.summary
                     birth_year, death_year = self._extract_life_years(extract, page.content)
                     
-                    # 妥当性チェック：明治・大正・昭和期の人物かどうか
-                    if birth_year and (1800 <= birth_year <= 1950):
+                    # 文豪の年代チェック（より厳格に）
+                    if birth_year and (1850 <= birth_year <= 1920) and self._is_literary_figure(extract):
                         return {
                             'title': page.title,
                             'url': page.url,
@@ -84,15 +89,15 @@ class WikipediaAuthorEnricher:
                     
                 except wikipedia.exceptions.DisambiguationError as e:
                     # 曖昧さ回避ページの場合、適切な候補を選択
-                    best_option = self._select_best_disambiguation_option(author_name, e.options)
+                    best_option = self._select_best_literary_option(author_name, e.options)
                     if best_option:
                         try:
                             page = wikipedia.page(best_option)
                             extract = page.summary
                             birth_year, death_year = self._extract_life_years(extract, page.content)
                             
-                            # 妥当性チェック
-                            if birth_year and (1800 <= birth_year <= 1950):
+                            # 文豪の年代チェック
+                            if birth_year and (1850 <= birth_year <= 1920) and self._is_literary_figure(extract):
                                 return {
                                     'title': page.title,
                                     'url': page.url,
@@ -121,18 +126,54 @@ class WikipediaAuthorEnricher:
             print(f"⚠️ Wikipedia検索エラー ({author_name}): {e}")
             return None
     
-    def _select_best_disambiguation_option(self, author_name: str, options: List[str]) -> Optional[str]:
-        """曖昧さ回避ページから最適な選択肢を選ぶ"""
-        # 植物学者、博士、学者などのキーワードが含まれる選択肢を優先
-        priority_keywords = ['植物学者', '博士', '学者', '研究者', '教授', '明治', '大正', '昭和']
+    def _is_literary_figure(self, extract: str) -> bool:
+        """テキストから文学者かどうかを判定"""
+        literary_keywords = [
+            '作家', '小説家', '詩人', '文学者', '歌人', '俳人',
+            '小説', '詩', '文学', '作品', '著作', '執筆',
+            '明治文学', '大正文学', '昭和文学', '近代文学',
+            '青空文庫', 'プロレタリア文学', '自然主義'
+        ]
         
+        # 文学関連キーワードが含まれているかチェック
+        for keyword in literary_keywords:
+            if keyword in extract:
+                return True
+        return False
+    
+    def _select_best_literary_option(self, author_name: str, options: List[str]) -> Optional[str]:
+        """曖昧さ回避ページから文豪として最適な選択肢を選ぶ"""
+        # 文学者向けの優先キーワード
+        priority_keywords = [
+            '作家', '小説家', '詩人', '文学者', '歌人', '俳人',
+            '明治', '大正', '昭和', '文学', '小説', '詩'
+        ]
+        
+        # 避けるべきキーワード（同名異人を排除）
+        avoid_keywords = [
+            '植物学者', '博士', '学者', '研究者', '教授', '医師',
+            '政治家', '実業家', '軍人', '官僚', '現代', '平成'
+        ]
+        
+        # まず避けるべきオプションを除外
+        filtered_options = []
+        for option in options:
+            should_avoid = False
+            for avoid_word in avoid_keywords:
+                if avoid_word in option:
+                    should_avoid = True
+                    break
+            if not should_avoid:
+                filtered_options.append(option)
+        
+        # 優先キーワードが含まれる選択肢を探す
         for keyword in priority_keywords:
-            for option in options:
+            for option in filtered_options:
                 if keyword in option:
                     return option
         
-        # キーワードが見つからない場合は最初の選択肢
-        return options[0] if options else None
+        # 優先キーワードが見つからない場合は、除外しなかった最初の選択肢
+        return filtered_options[0] if filtered_options else None
     
     def _extract_life_years(self, summary: str, content: str) -> Tuple[Optional[int], Optional[int]]:
         """テキストから生年・没年を抽出（改良版）"""
@@ -372,12 +413,13 @@ class WikipediaAuthorEnricher:
             author_name,
             birth_year as author_birth_year,
             death_year as author_death_year,
-            wikipedia_url
+            wikipedia_url,
+            aozora_works_count
         FROM authors 
         WHERE birth_year IS NULL 
            OR death_year IS NULL 
            OR wikipedia_url IS NULL
-        ORDER BY author_name
+        ORDER BY aozora_works_count DESC, author_name
         """
         
         try:
@@ -390,15 +432,16 @@ class WikipediaAuthorEnricher:
                 return {'missing_count': 0, 'authors': []}
             
             print(f"📋 情報不足の作者: {len(missing_info_authors)} 人")
-            print("-"*80)
-            print(f"{'ID':<4} {'作者名':<20} {'生年':<8} {'没年':<8} {'Wikipedia':<10}")
-            print("-"*80)
+            print("-"*90)
+            print(f"{'ID':<4} {'作者名':<20} {'作品数':<6} {'生年':<8} {'没年':<8} {'Wikipedia':<10}")
+            print("-"*90)
             
-            for author_id, name, birth, death, wiki_url in missing_info_authors:
+            for author_id, name, birth, death, wiki_url, works_count in missing_info_authors:
                 birth_str = str(birth) if birth else "なし"
                 death_str = str(death) if death else "なし"
                 wiki_str = "あり" if wiki_url else "なし"
-                print(f"{author_id:<4} {name:<20} {birth_str:<8} {death_str:<8} {wiki_str:<10}")
+                works_str = str(works_count) if works_count else "0"
+                print(f"{author_id:<4} {name:<20} {works_str:<6} {birth_str:<8} {death_str:<8} {wiki_str:<10}")
             
             return {
                 'missing_count': len(missing_info_authors),
@@ -415,8 +458,65 @@ class WikipediaAuthorEnricher:
         pass
 
 
+def enrich_limited_authors(enricher, limit: int) -> Dict:
+    """指定数の作者の情報を補完"""
+    print(f"🎯 {limit}名限定での作者情報補完を開始します...")
+    start_time = time.time()
+    
+    try:
+        # 情報不足の作者を取得（作品数順、limit適用）
+        query = """
+        SELECT author_id, author_name 
+        FROM authors 
+        WHERE birth_year IS NULL 
+           OR death_year IS NULL 
+           OR wikipedia_url IS NULL
+        ORDER BY aozora_works_count DESC, author_name
+        LIMIT ?
+        """
+        
+        with enricher.db.get_connection() as conn:
+            cursor = conn.execute(query, (limit,))
+            authors = cursor.fetchall()
+        
+        if not authors:
+            print("❌ 処理対象の作者データが見つかりません")
+            return enricher.stats
+        
+        enricher.stats['total_authors'] = len(authors)
+        print(f"📊 処理対象: {len(authors)} 人の作者")
+        
+        # 各作者について処理
+        for i, (author_id, author_name) in enumerate(authors, 1):
+            print(f"\n🔄 [{i}/{len(authors)}] 処理中...")
+            
+            # Wikipedia情報で補完
+            enricher.enrich_author_info(author_id, author_name)
+            
+            # API制限対策（1秒間隔）
+            time.sleep(1.0)
+        
+        # 統計情報更新
+        enricher.stats['processing_time'] = time.time() - start_time
+        
+        return enricher.stats
+        
+    except Exception as e:
+        print(f"❌ データベースエラー: {e}")
+        enricher.stats['processing_time'] = time.time() - start_time
+        return enricher.stats
+
 def main():
     """メイン実行関数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Wikipedia作者情報自動補完システム')
+    parser.add_argument('--limit', type=int, help='処理する作者数の上限')
+    parser.add_argument('--specific-authors', type=str, help='特定作者名（カンマ区切り）')
+    parser.add_argument('--dry-run', action='store_true', help='実行せずにプレビューのみ')
+    
+    args = parser.parse_args()
+    
     enricher = WikipediaAuthorEnricher()
     
     try:
@@ -427,7 +527,27 @@ def main():
             print("✅ 処理は不要です")
             return
         
-        # ユーザー確認
+        # ドライランの場合はプレビューのみ
+        if args.dry_run:
+            print("🔍 ドライラン: プレビューのみを実行しました")
+            return
+        
+        # 特定作者指定の場合
+        if args.specific_authors:
+            author_names = [name.strip() for name in args.specific_authors.split(',')]
+            print(f"🎯 特定作者の処理: {author_names}")
+            stats = enricher.enrich_specific_authors(author_names)
+            enricher.print_statistics()
+            return
+        
+        # 限定処理の場合
+        if args.limit:
+            print(f"🎯 {args.limit}名限定で処理を実行します")
+            stats = enrich_limited_authors(enricher, args.limit)
+            enricher.print_statistics()
+            return
+        
+        # 通常の全作者処理
         print(f"\n🤔 {missing_info['missing_count']} 人の作者情報を補完しますか？")
         print("この処理には時間がかかる場合があります。")
         

@@ -14,7 +14,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from database import DatabaseManager, Author, Work, Sentence
-from extractors.aozora_scraper import AozoraScraper
+from .aozora_scraper import AozoraScraper
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

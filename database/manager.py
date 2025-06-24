@@ -73,7 +73,7 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
-                    "SELECT * FROM works WHERE work_title = ? AND author_id = ?",
+                    "SELECT * FROM works WHERE title = ? AND author_id = ?",
                     (work_title, author_id)
                 )
                 result = cursor.fetchone()
@@ -148,6 +148,44 @@ class DatabaseManager:
             logger.error(f"作者保存エラー: {e}")
             return None
 
+    def create_author(self, author_data) -> Optional[int]:
+        """新規作者作成（save_authorのエイリアス）"""
+        return self.save_author(author_data)
+
+    def create_or_get_author(self, author_data) -> Optional[int]:
+        """作者を作成または取得（統一インターフェース）"""
+        return self.save_author(author_data)
+
+    def update_author(self, author_id: int, author_data: dict) -> bool:
+        """作者情報更新"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # 更新フィールドを動的に構築
+                update_fields = []
+                values = []
+                
+                for key, value in author_data.items():
+                    if key != 'author_id':  # IDは更新しない
+                        update_fields.append(f"{key} = ?")
+                        values.append(value)
+                
+                if not update_fields:
+                    return False
+                
+                values.append(author_id)
+                values.append(datetime.now().isoformat())
+                
+                query = f"""UPDATE authors SET 
+                    {', '.join(update_fields)}, updated_at = ?
+                    WHERE author_id = ?"""
+                
+                cursor = conn.execute(query, values)
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"作者更新エラー: {e}")
+            return False
+
     def save_work(self, work_data) -> Optional[int]:
         """作品情報を保存（辞書形式とWorkオブジェクト両方に対応）"""
         try:
@@ -157,7 +195,7 @@ class DatabaseManager:
                 author_id = work_data.get('author_id')
                 publication_year = work_data.get('publication_year')
                 genre = work_data.get('genre')
-                aozora_url = work_data.get('aozora_url') or work_data.get('work_url')
+                aozora_url = work_data.get('aozora_url') or work_data.get('aozora_work_url') or work_data.get('work_url')
                 content_length = work_data.get('content_length', 0)
                 sentence_count = work_data.get('sentence_count', 0)
                 source_system = work_data.get('source_system', 'aozora_scraper')
@@ -177,21 +215,16 @@ class DatabaseManager:
                 cursor = conn.execute(
                     """
                     INSERT INTO works (
-                        work_title, author_id, publication_year, genre, aozora_url, 
-                        content_length, sentence_count, source_system, processing_status,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        title, author_id, aozora_work_url, 
+                        content_length, sentence_count, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         work_title,
                         author_id,
-                        publication_year,
-                        genre,
                         aozora_url,
                         content_length,
                         sentence_count,
-                        source_system,
-                        processing_status,
                         datetime.now().isoformat(),
                         datetime.now().isoformat()
                     )
@@ -208,7 +241,7 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
-                    "SELECT * FROM works WHERE author_id = ? ORDER BY work_title",
+                    "SELECT * FROM works WHERE author_id = ? ORDER BY title",
                     (author_id,)
                 )
                 results = cursor.fetchall()
@@ -248,33 +281,34 @@ class DatabaseManager:
             return []
 
     def save_sentence(self, sentence_data) -> Optional[int]:
-        """センテンス情報を保存（最適化済みスキーマ対応）"""
+        """センテンス情報を保存（v2スキーマ対応）"""
         try:
             # 辞書形式とSentenceオブジェクト両方に対応
             if isinstance(sentence_data, dict):
                 sentence_text = sentence_data.get('sentence_text')
                 work_id = sentence_data.get('work_id')
-                author_id = sentence_data.get('author_id')
+                sentence_order = sentence_data.get('sentence_order', 1)
+                paragraph_number = sentence_data.get('paragraph_number', 1)
                 character_count = sentence_data.get('character_count', len(sentence_text or ''))
             else:
                 sentence_text = sentence_data.sentence_text
                 work_id = sentence_data.work_id
-                author_id = sentence_data.author_id
+                sentence_order = getattr(sentence_data, 'sentence_order', 1)
+                paragraph_number = getattr(sentence_data, 'paragraph_number', 1)
                 character_count = len(sentence_text or '')
             
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO sentences (
-                        sentence_text, work_id, author_id, sentence_length, created_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        work_id, sentence_order, sentence_text, char_count
+                    ) VALUES (?, ?, ?, ?)
                     """,
                     (
-                        sentence_text,
                         work_id,
-                        author_id,
-                        character_count,
-                        datetime.now().isoformat()
+                        sentence_order,
+                        sentence_text,
+                        character_count
                     )
                 )
                 conn.commit()
@@ -329,28 +363,26 @@ class DatabaseManager:
             return None
 
     def save_sentence_place(self, sp: SentencePlace) -> Optional[int]:
+        """センテンス-地名関係を保存（v2スキーマ対応）"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO sentence_places (
-                        sentence_id, place_id, extraction_method, confidence, position_in_sentence, context_before, context_after, matched_text, verification_status, quality_score, relevance_score, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        sentence_id, master_id, matched_text, start_position, end_position,
+                        extraction_confidence, extraction_method, ai_verified, ai_confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sp.sentence_id,
-                        sp.place_id,
-                        sp.extraction_method,
-                        sp.confidence,
-                        sp.position_in_sentence,
-                        sp.context_before,
-                        sp.context_after,
+                        getattr(sp, 'master_id', None) or sp.place_id,  # 互換性
                         sp.matched_text,
-                        sp.verification_status,
-                        sp.quality_score,
-                        sp.relevance_score,
-                        datetime.now().isoformat(),
-                        datetime.now().isoformat()
+                        getattr(sp, 'start_position', sp.position_in_sentence),
+                        getattr(sp, 'end_position', None),
+                        sp.confidence,
+                        sp.extraction_method,
+                        getattr(sp, 'ai_verified', False),
+                        getattr(sp, 'ai_confidence', None)
                     )
                 )
                 conn.commit()
@@ -365,7 +397,7 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     """
-                    SELECT w.work_title, w.place_count, w.sentence_count, a.author_name
+                    SELECT w.title, w.place_count, w.sentence_count, a.author_name
                     FROM works w
                     JOIN authors a ON w.author_id = a.author_id
                     WHERE w.work_id = ?
@@ -406,15 +438,15 @@ if __name__ == "__main__":
     
     if author_id:
         # テスト用の作品データ
-        work = Work(
-            work_title="吾輩は猫である",
-            author_id=author_id,
-            publication_year=1905,
-            genre="小説",
-            aozora_url="https://www.aozora.gr.jp/cards/000148/files/789_14547.html",
-            content_length=0,
-            sentence_count=0
-        )
+        work = {
+            'title': "吾輩は猫である",
+            'author_id': author_id,
+            'publication_year': 1905,
+            'genre': "小説",
+            'aozora_url': "https://www.aozora.gr.jp/cards/000148/files/789_14547.html",
+            'content_length': 0,
+            'sentence_count': 0
+        }
         
         # 作品を保存
         work_id = manager.save_work(work)

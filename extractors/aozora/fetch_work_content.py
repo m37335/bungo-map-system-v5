@@ -314,7 +314,7 @@ class WorkContentProcessor:
                 conn.execute(
                     """
                     UPDATE works 
-                    SET content_length = ?, sentence_count = ?, processing_status = 'completed', updated_at = CURRENT_TIMESTAMP
+                    SET content_length = ?, sentence_count = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE work_id = ?
                     """,
                     (content_length, sentence_count, work_id)

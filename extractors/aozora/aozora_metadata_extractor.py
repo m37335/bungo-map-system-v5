@@ -109,13 +109,22 @@ class AozoraMetadataExtractor:
             return None
     
     def _extract_year_from_text(self, text: str) -> Optional[int]:
-        """テキストから年を抽出（改良版：多様なパターン対応）"""
-        # パターン1: 西暦年（1900-2100）
+        """テキストから年を抽出（改良版：多様なパターン対応 + 強化版）"""
+        # パターン1: 西暦年（1800-2100）- 強化版
         year_patterns = [
             r'(\d{4})年',  # 1930年
             r'(\d{4})（.*?）年',  # 1930（昭和5）年
             r'「.*?」(\d{4})年',  # 「雑誌名」1930年
             r'『.*?』(\d{4})年',  # 『雑誌名』1930年
+            r'(\d{4})・\d+・\d+',  # 1930・1・1 (日付形式)
+            r'(\d{4})/\d+/\d+',   # 1930/1/1
+            r'(\d{4})-\d+-\d+',   # 1930-1-1
+            r'(\d{4})年\d+月',    # 1930年1月
+            r'(\d{4})．\d+．\d+', # 1930．1．1
+            r'明治(\d+)・大正・昭和',  # 複数年号記載
+            r'(\d{4})ころ',       # 1930ころ
+            r'(\d{4})頃',         # 1930頃
+            r'(\d{4})前後',       # 1930前後
         ]
         
         for pattern in year_patterns:
@@ -128,22 +137,52 @@ class AozoraMetadataExtractor:
                 except ValueError:
                     continue
         
-        # パターン2: 年号変換
+        # パターン2: 年号変換 - 強化版
         era_patterns = [
             (r'明治(\d+)年', 1867),  # 明治元年=1868年
             (r'大正(\d+)年', 1911),  # 大正元年=1912年
             (r'昭和(\d+)年', 1925),  # 昭和元年=1926年
+            (r'明治(\d+)', 1867),    # 「年」なしパターン
+            (r'大正(\d+)', 1911),
+            (r'昭和(\d+)', 1925),
+            (r'明治(\d+)・(\d+)', 1867),  # 明治43・44
+            (r'大正(\d+)・(\d+)', 1911),  # 大正1・2
+            (r'昭和(\d+)・(\d+)', 1925),  # 昭和5・6
         ]
         
         for pattern, base_year in era_patterns:
             matches = re.findall(pattern, text)
             for match in matches:
                 try:
-                    era_year = int(match)
+                    if isinstance(match, tuple):
+                        # 複数年号の場合、最初の年を使用
+                        era_year = int(match[0])
+                    else:
+                        era_year = int(match)
+                    
                     if era_year > 0:  # 0年は無効
                         year = base_year + era_year
                         if 1800 <= year <= 2100:
                             return year
+                except ValueError:
+                    continue
+        
+        # パターン3: 新機能 - 文脈から推定
+        context_patterns = [
+            r'戦前.*?(\d{4})',     # 戦前の文脈
+            r'戦後.*?(\d{4})',     # 戦後の文脈
+            r'明治時代.*?(\d{4})', # 明治時代の文脈
+            r'大正時代.*?(\d{4})', # 大正時代の文脈
+            r'昭和時代.*?(\d{4})', # 昭和時代の文脈
+        ]
+        
+        for pattern in context_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                try:
+                    year = int(match)
+                    if 1800 <= year <= 2100:
+                        return year
                 except ValueError:
                     continue
         

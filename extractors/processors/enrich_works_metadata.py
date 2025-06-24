@@ -11,7 +11,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-from extractors.aozora_metadata_extractor import AozoraMetadataExtractor
+from ..aozora.aozora_metadata_extractor import AozoraMetadataExtractor
 
 def main():
     """全作品のメタデータを一括補完"""

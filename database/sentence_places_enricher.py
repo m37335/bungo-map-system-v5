@@ -88,13 +88,7 @@ class SentencePlacesEnricher:
                         WHERE s.sentence_id = sentence_places.sentence_id
                     ),
                     work_title = (
-                        SELECT w.work_title 
-                        FROM sentences s
-                        JOIN works w ON s.work_id = w.work_id
-                        WHERE s.sentence_id = sentence_places.sentence_id
-                    ),
-                    work_genre = (
-                        SELECT w.genre 
+                        SELECT w.title 
                         FROM sentences s
                         JOIN works w ON s.work_id = w.work_id
                         WHERE s.sentence_id = sentence_places.sentence_id
@@ -104,8 +98,37 @@ class SentencePlacesEnricher:
                         FROM sentences s
                         JOIN works w ON s.work_id = w.work_id
                         WHERE s.sentence_id = sentence_places.sentence_id
+                    ),
+                    context_before = (
+                        SELECT GROUP_CONCAT(s_before.sentence_text, '') 
+                        FROM sentences s_current
+                        JOIN sentences s_before ON s_current.work_id = s_before.work_id 
+                        AND s_before.sentence_order >= s_current.sentence_order - 2 
+                        AND s_before.sentence_order < s_current.sentence_order
+                        WHERE s_current.sentence_id = sentence_places.sentence_id
+                        GROUP BY s_current.sentence_id
+                    ),
+                    context_after = (
+                        SELECT GROUP_CONCAT(s_after.sentence_text, '') 
+                        FROM sentences s_current
+                        JOIN sentences s_after ON s_current.work_id = s_after.work_id 
+                        AND s_after.sentence_order > s_current.sentence_order 
+                        AND s_after.sentence_order <= s_current.sentence_order + 2
+                        WHERE s_current.sentence_id = sentence_places.sentence_id
+                        GROUP BY s_current.sentence_id
+                    ),
+                    matched_text = (
+                        SELECT pm.display_name
+                        FROM place_masters pm
+                        WHERE pm.master_id = sentence_places.master_id
+                    ),
+                    position_in_sentence = (
+                        SELECT INSTR(s.sentence_text, pm.display_name) - 1
+                        FROM sentences s
+                        JOIN place_masters pm ON pm.master_id = sentence_places.master_id
+                        WHERE s.sentence_id = sentence_places.sentence_id
                     )
-                WHERE author_name IS NULL OR work_title IS NULL
+                WHERE author_name IS NULL OR work_title IS NULL OR context_before IS NULL OR context_after IS NULL
             """
             
             cursor.execute(update_query)
@@ -198,7 +221,7 @@ class SentencePlacesEnricher:
                     JOIN sentences s1 ON s1.sentence_id = sentence_places.sentence_id
                     JOIN sentences s2 ON s2.sentence_id = sp2.sentence_id
                     WHERE s1.work_id = s2.work_id 
-                    AND sp2.place_id = sentence_places.place_id
+                    AND sp2.master_id = sentence_places.master_id
                 )
                 WHERE place_frequency_in_work IS NULL
             """
@@ -215,8 +238,10 @@ class SentencePlacesEnricher:
                     FROM sentence_places sp2
                     JOIN sentences s1 ON s1.sentence_id = sentence_places.sentence_id
                     JOIN sentences s2 ON s2.sentence_id = sp2.sentence_id
-                    WHERE s1.author_id = s2.author_id 
-                    AND sp2.place_id = sentence_places.place_id
+                    JOIN works w1 ON s1.work_id = w1.work_id
+                    JOIN works w2 ON s2.work_id = w2.work_id
+                    WHERE w1.author_id = w2.author_id 
+                    AND sp2.master_id = sentence_places.master_id
                 )
                 WHERE place_frequency_by_author IS NULL
             """

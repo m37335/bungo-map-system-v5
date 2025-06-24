@@ -32,7 +32,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 from database.sentence_places_enricher import SentencePlacesEnricher
-from extractors.aozora_metadata_extractor import AozoraMetadataExtractor
+from ..aozora.aozora_metadata_extractor import AozoraMetadataExtractor
 
 class MaintenancePipeline:
     """メンテナンスパイプライン実行器"""

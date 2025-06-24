@@ -10,10 +10,10 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from .author_list_scraper import AuthorListScraper, AuthorInfo
-from ..database.manager import DatabaseManager
-from ..database.models import Author
-from ..core.config import get_config
+from ..aozora.author_list_scraper import AuthorListScraper, AuthorInfo
+from database.manager import DatabaseManager
+from database.models import Author
+from core.config import get_config
 
 logger = logging.getLogger(__name__)
 

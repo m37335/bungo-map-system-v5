@@ -13,14 +13,14 @@ import time
 import logging
 import argparse
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 # パスを追加
 sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/../'))
 
 from database.manager import DatabaseManager
-from extractors.collect_author_works import AuthorWorksCollector
-from extractors.fetch_work_content import WorkContentProcessor
+from ..aozora.collect_author_works import AuthorWorksCollector
+from ..aozora.fetch_work_content import WorkContentProcessor
 
 # ログ設定
 logging.basicConfig(
@@ -38,7 +38,7 @@ class CompleteAuthorProcessor:
         self.works_collector = AuthorWorksCollector()
         self.content_processor = WorkContentProcessor()
         
-    def process_author_complete(self, author_name: str, content_processing: bool = True) -> Dict[str, any]:
+    def process_author_complete(self, author_name: str, content_processing: bool = True) -> Dict[str, Any]:
         """指定作者の完全処理（ワークフロー①〜⑦）
         
         Args:
@@ -46,7 +46,7 @@ class CompleteAuthorProcessor:
             content_processing: 本文処理も実行するか
             
         Returns:
-            Dict[str, any]: 処理結果統計
+            Dict[str, Any]: 処理結果統計
         """
         logger.info(f"作者完全処理開始: {author_name}")
         
@@ -112,7 +112,7 @@ class CompleteAuthorProcessor:
             logger.error(f"作者完全処理エラー {author_name}: {e}")
             return result
     
-    def process_multiple_authors(self, author_names: List[str], content_processing: bool = True) -> Dict[str, any]:
+    def process_multiple_authors(self, author_names: List[str], content_processing: bool = True) -> Dict[str, Any]:
         """複数作者の一括処理
         
         Args:
@@ -120,7 +120,7 @@ class CompleteAuthorProcessor:
             content_processing: 本文処理も実行するか
             
         Returns:
-            Dict[str, any]: 全体の処理結果統計
+            Dict[str, Any]: 全体の処理結果統計
         """
         logger.info(f"複数作者一括処理開始: {len(author_names)}名")
         
@@ -165,7 +165,7 @@ class CompleteAuthorProcessor:
         logger.info(f"複数作者一括処理完了: {results}")
         return results
     
-    def process_all_authors(self, limit: Optional[int] = None, content_processing: bool = True) -> Dict[str, any]:
+    def process_all_authors(self, limit: Optional[int] = None, content_processing: bool = True) -> Dict[str, Any]:
         """全作者の一括処理
         
         Args:
@@ -173,7 +173,7 @@ class CompleteAuthorProcessor:
             content_processing: 本文処理も実行するか
             
         Returns:
-            Dict[str, any]: 全体の処理結果統計
+            Dict[str, Any]: 全体の処理結果統計
         """
         logger.info("全作者一括処理開始")
         
@@ -187,14 +187,14 @@ class CompleteAuthorProcessor:
         
         return self.process_multiple_authors(author_names, content_processing)
     
-    def get_author_processing_status(self, author_name: str) -> Dict[str, any]:
+    def get_author_processing_status(self, author_name: str) -> Dict[str, Any]:
         """作者の処理状況を確認
         
         Args:
             author_name: 作者名
             
         Returns:
-            Dict[str, any]: 処理状況
+            Dict[str, Any]: 処理状況
         """
         author = self.db_manager.get_author_by_name(author_name)
         if not author:

@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 文豪ゆかり地図システム v4.0 - 統合パイプライン実行器
-作者指定で青空文庫→センテンス分割→地名抽出まで完全自動化
+地名マスター優先設計による効率的な処理システム
 
 使用例:
     python3 run_pipeline.py --author "梶井 基次郎"
     python3 run_pipeline.py --status "梶井 基次郎"
+    python3 run_pipeline.py --ai-verify
+    python3 run_pipeline.py --ai-verify-delete
 """
 
 import sys
@@ -19,32 +21,97 @@ from typing import List, Dict, Any
 # パス設定
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# 既存の処理クラス
-from extractors.process_complete_author import CompleteAuthorProcessor
-from extractors.enhanced_place_extractor_v2 import EnhancedPlaceExtractorV2
-from ai.context_aware_geocoding import ContextAwareGeocoder
-from extractors.wikipedia_author_enricher import WikipediaAuthorEnricher
+# リファクタリング後のモジュラーシステム
+from extractors.processors import CompleteAuthorProcessor
+from extractors.places.enhanced_place_extractor import EnhancedPlaceExtractorV3
+from extractors.places.place_master_manager import PlaceMasterManagerV2
+from ai.llm import LLMClient
+from ai.nlp import ContextAnalyzer
+from ai.geocoding import GeocodingEngine
+from extractors.wikipedia import WikipediaAuthorEnricher
 from database.sentence_places_enricher import SentencePlacesEnricher
-from extractors.aozora_metadata_extractor import AozoraMetadataExtractor
+from extractors.aozora import AozoraMetadataExtractor
+from extractors.aozora.author_list_scraper import AuthorListScraper
 
 class BungoPipeline:
-    """文豪地図システム統合パイプライン"""
+    """文豪地図システム統合パイプライン（地名マスター優先版）"""
     
     def __init__(self):
         print("🚀 文豪ゆかり地図システム v4.0 - パイプライン初期化中...")
+        print("✨ 地名マスター優先設計による効率的な処理")
+        
         self.author_processor = CompleteAuthorProcessor()
-        self.place_extractor = EnhancedPlaceExtractorV2()
-        self.context_aware_geocoder = ContextAwareGeocoder()
+        self.place_extractor = EnhancedPlaceExtractorV3()
+        self.place_master_manager = PlaceMasterManagerV2()
+        
+        # 新しいモジュラーAIシステム
+        self.llm_client = LLMClient()
+        self.context_analyzer = ContextAnalyzer()
+        self.geocoding_engine = GeocodingEngine(self.llm_client)
+        
         self.wikipedia_enricher = WikipediaAuthorEnricher()
         self.sentence_places_enricher = SentencePlacesEnricher()
         self.metadata_extractor = AozoraMetadataExtractor()
+        
+        # 青空文庫URL自動取得機能
+        self.author_list_scraper = AuthorListScraper()
+        
         print("✅ パイプライン初期化完了")
+        print("🎯 地名マスター検索 → 重複ジオコーディング回避 → API効率化")
     
-    def run_full_pipeline(self, author_name: str, include_places: bool = True, include_geocoding: bool = True, include_maintenance: bool = True) -> Dict[str, Any]:
-        """完全パイプライン実行"""
+    def check_and_set_aozora_url(self, author_name: str) -> bool:
+        """青空文庫URL確認・自動設定"""
+        try:
+            import sqlite3
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'bungo_map.db')
+            
+            # 現在のURL状況確認
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT author_id, author_name, aozora_author_url
+                FROM authors 
+                WHERE author_name = ?
+            """, (author_name,))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if not result:
+                print(f"❌ 作者 {author_name} がデータベースに見つかりません")
+                return False
+            
+            author_id, db_author_name, current_url = result
+            
+            # 青空文庫URLが既に設定されている場合
+            if current_url and current_url.strip():
+                print(f"✅ 青空文庫URL設定済み: {current_url}")
+                return True
+            
+            # 青空文庫URLが未設定の場合、自動取得
+            print(f"🔍 青空文庫URL未設定 - 自動取得開始: {author_name}")
+            
+            success = self.author_list_scraper.update_single_author_url(author_name)
+            
+            if success:
+                print(f"✅ 青空文庫URL自動設定完了")
+                return True
+            else:
+                print(f"⚠️ 青空文庫URL取得失敗 - パイプライン継続（一部制限あり）")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 青空文庫URLチェックエラー: {e}")
+            return False
+    
+    def run_full_pipeline(self, author_name: str, include_places: bool = True, 
+                         include_geocoding: bool = True, include_maintenance: bool = True) -> Dict[str, Any]:
+        """完全パイプライン実行（地名マスター優先版）"""
         start_time = datetime.now()
         print(f"\n🌟 文豪ゆかり地図システム - 完全パイプライン開始")
         print(f"👤 対象作者: {author_name}")
+        print(f"🎯 地名マスター優先設計による効率的な処理")
         print("=" * 80)
         
         results = {
@@ -59,12 +126,23 @@ class BungoPipeline:
             'geocoding_skipped': 0,
             'geocoding_success_rate': 0.0,
             'sentences_processed': 0,
+            'master_cache_hits': 0,
+            'new_masters_created': 0,
+            'aozora_url_status': False,
             'errors': []
         }
         
         try:
+            # 事前チェック: 青空文庫URL確認・自動設定
+            print("🔄 事前チェック: 青空文庫URL確認...")
+            url_status = self.check_and_set_aozora_url(author_name)
+            results['aozora_url_status'] = url_status
+            
+            if not url_status:
+                print("⚠️ 青空文庫URL取得失敗 - 作品収集に制限がかかる可能性があります")
+            
             # ステップ1: 作者・作品処理
-            print("🔄 ステップ1: 作者作品処理開始...")
+            print("\n🔄 ステップ1: 作者作品処理開始...")
             print("  📚 青空文庫から作品収集")
             print("  📄 本文取得・テキスト処理")
             print("  📝 センテンス分割・保存")
@@ -72,66 +150,41 @@ class BungoPipeline:
             step1_result = self.author_processor.process_author_complete(author_name, content_processing=True)
             
             if step1_result and step1_result.get('success', False):
-                # 正しい結果から情報を取得
                 results['works_processed'] = step1_result.get('works_collection', {}).get('new_works', 0)
                 results['sentences_created'] = step1_result.get('content_processing', {}).get('total_sentences', 0)
                 print(f"✅ ステップ1完了: {results['works_processed']}作品、{results['sentences_created']:,}センテンス")
             else:
                 raise Exception("作者・作品処理に失敗しました")
             
-            # ステップ2: 地名処理
+            # ステップ2: 地名マスター優先処理
             if include_places:
-                if include_geocoding:
-                    print("\n🔄 ステップ2: 地名抽出→AI文脈判断型ジオコーディング開始...")
-                    print("  🗺️  センテンスから地名抽出（前後文付き）")
-                    print("  🤖 AI文脈分析によるジオコーディング")
-                    print("  🌍 Google Maps API統合座標取得")
-                    print("  💾 高精度データベース保存")
-                    
-                    # ステップ2A: 地名抽出
-                    step2a_result = self.place_extractor.process_sentences_batch()
-                    results['sentences_processed'] = step2a_result.get('processed_sentences', 0)
-                    results['places_extracted'] = step2a_result.get('extracted_places', 0)
-                    results['places_saved'] = step2a_result.get('saved_places', 0)
-                    
-                    print(f"✅ ステップ2A完了: {results['sentences_processed']}センテンス処理、{results['places_extracted']}地名抽出")
-                    
-                    # ステップ2B: AI文脈判断型ジオコーディング
-                    if results['places_extracted'] > 0:
-                        print("\n🔄 ステップ2B: AI文脈判断型ジオコーディング開始...")
-                        step2b_result = self.context_aware_geocoder.geocode_places_batch()
-                        
-                        results['places_geocoded'] = step2b_result.get('geocoded_places', 0)
-                        
-                        if results['places_extracted'] > 0:
-                            results['geocoding_success_rate'] = (results['places_geocoded'] / results['places_extracted']) * 100
-                        else:
-                            results['geocoding_success_rate'] = 0.0
-                        
-                        print(f"✅ ステップ2B完了: {results['places_geocoded']}件ジオコーディング成功 ({results['geocoding_success_rate']:.1f}%)")
-                    
-                    print(f"✅ ステップ2統合完了: {results['sentences_processed']}センテンス処理、{results['places_extracted']}地名抽出、{results['places_geocoded']}件ジオコーディング成功 ({results['geocoding_success_rate']:.1f}%)")
-                else:
-                    print("\n🔄 ステップ2: 地名抽出開始...")
-                    print("  🗺️  センテンスから地名抽出（前後文付き）")
-                    
-                    # 地名抽出のみ実行
-                    step2_result = self.place_extractor.process_sentences_batch()
-                    
-                    results['sentences_processed'] = step2_result.get('processed_sentences', 0)
-                    results['places_extracted'] = step2_result.get('extracted_places', 0)
-                    results['places_saved'] = step2_result.get('saved_places', 0)
-                    print(f"✅ ステップ2完了: {results['sentences_processed']}センテンス処理、{results['places_extracted']}地名抽出、{results['places_saved']}件保存")
+                print("\n🔄 ステップ2: 地名マスター優先抽出・処理開始...")
+                print("  🔍 地名抽出 → マスター検索")
+                print("  ⚡ 既存地名: キャッシュ参照（ジオコーディングスキップ）")
+                print("  🆕 新規地名: マスター作成 → ジオコーディング実行")
+                print("  🤖 AI検証統合による品質保証")
+                
+                # 作者のworksを取得してprocessing
+                step2_result = self._process_author_places(author_name)
+                
+                results.update(step2_result)
+                
+                print(f"✅ ステップ2完了:")
+                print(f"  📊 処理: {results['sentences_processed']}センテンス")
+                print(f"  🗺️ 抽出: {results['places_extracted']}地名")
+                print(f"  ⚡ キャッシュヒット: {results['master_cache_hits']}件")
+                print(f"  🆕 新規マスター: {results['new_masters_created']}件")
+                print(f"  🌍 ジオコーディング: {results['places_geocoded']}件")
+                print(f"  📈 成功率: {results['geocoding_success_rate']:.1f}%")
             
-            # ステップ3: データ品質保証（新機能）
+            # ステップ3: データ品質保証（改良版）
             if include_maintenance:
                 print("\n🔄 ステップ3: データ品質保証・メンテナンス...")
                 print("  👤 Wikipedia作者情報自動補完")
                 print("  📝 sentence_places作者・作品情報補完")
                 print("  📚 worksメタデータ自動補完")
                 print("  📅 出版年情報更新")
-                print("  🔧 matched_text文全体修正")
-                print("  🗺️ 地名重複統合処理")
+                print("  🏗️ 地名マスター統計更新")
                 
                 step3_result = self._run_data_quality_maintenance()
                 results.update(step3_result)
@@ -157,99 +210,149 @@ class BungoPipeline:
         self._print_report(results)
         return results
     
+    def _process_author_places(self, author_name: str) -> Dict[str, Any]:
+        """作者の地名処理（地名マスター優先）"""
+        try:
+            # 作者の作品ID取得
+            import sqlite3
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'bungo_map.db')
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT w.work_id, w.title 
+                FROM works w
+                JOIN authors a ON w.author_id = a.author_id
+                WHERE a.author_name = ?
+                ORDER BY w.work_id
+            """, (author_name,))
+            
+            works = cursor.fetchall()
+            conn.close()
+            
+            if not works:
+                print(f"⚠️ 作者 {author_name} の作品が見つかりません")
+                return {}
+            
+            print(f"📚 処理対象: {len(works)}作品")
+            
+            total_stats = {
+                'sentences_processed': 0,
+                'places_extracted': 0,
+                'places_saved': 0,
+                'places_geocoded': 0,
+                'geocoding_skipped': 0,
+                'geocoding_success_rate': 0.0,
+                'master_cache_hits': 0,
+                'new_masters_created': 0
+            }
+            
+            # 各作品を処理
+            for work_id, title in works:
+                print(f"\n📖 作品処理: {title}")
+                
+                work_stats = self.place_extractor.process_work_sentences(work_id, title)
+                
+                # 統計統合
+                total_stats['sentences_processed'] += work_stats.get('processed_sentences', 0)
+                total_stats['places_extracted'] += work_stats.get('total_places', 0)
+                
+                # マスター統計取得
+                master_stats = self.place_master_manager.get_master_statistics()
+                cache_stats = master_stats.get('cache_stats', {})
+                
+                total_stats['master_cache_hits'] += cache_stats.get('cache_hits', 0)
+                total_stats['new_masters_created'] += cache_stats.get('new_masters', 0)
+                total_stats['geocoding_skipped'] += cache_stats.get('geocoding_skipped', 0)
+                total_stats['places_geocoded'] += cache_stats.get('geocoding_executed', 0)
+            
+            # 成功率計算
+            if total_stats['places_extracted'] > 0:
+                total_stats['geocoding_success_rate'] = (
+                    total_stats['places_geocoded'] / 
+                    max(1, total_stats['new_masters_created']) * 100
+                )
+            
+            return total_stats
+            
+        except Exception as e:
+            print(f"❌ 地名処理エラー: {e}")
+            return {}
+    
     def check_status(self, author_name: str):
-        """作者の処理状況確認"""
+        """作者の処理状況確認（地名マスター統計含む）"""
         print(f"🔍 {author_name} の処理状況確認")
         print("=" * 60)
         try:
             status = self.author_processor.get_author_processing_status(author_name)
             
-            # 状況表示
+            # 基本状況表示
             print(f"👤 作者: {status.get('author_name', 'N/A')}")
             print(f"📚 作品数: {status.get('total_works', 0)}件")
             print(f"📝 センテンス数: {status.get('total_sentences', 0):,}件")
             print(f"🗺️ 地名数: {status.get('total_places', 0)}件")
             print(f"✅ 処理状況: {status.get('status', 'N/A')}")
             
+            # 地名マスター統計表示
+            print(f"\n📊 地名マスター統計:")
+            master_stats = self.place_master_manager.get_master_statistics()
+            print(f"  総マスター数: {master_stats.get('total_masters', 0):,}")
+            print(f"  ジオコーディング済み: {master_stats.get('geocoded_masters', 0):,} ({master_stats.get('geocoding_rate', 0):.1f}%)")
+            print(f"  使用回数計: {master_stats.get('total_usage', 0):,}")
+            
         except Exception as e:
             print(f"❌ 状況確認エラー: {e}")
     
-    def delete_invalid_places(self, place_names: List[str], reason: str = "パイプライン管理") -> Dict[str, Any]:
-        """無効地名削除"""
-        print(f"🗑️ 無効地名削除: {len(place_names)}件")
-        return self.context_aware_geocoder.delete_invalid_places(place_names, reason)
-    
-    def cleanup_invalid_places(self, auto_confirm: bool = False) -> Dict[str, Any]:
-        """無効地名自動クリーンアップ"""
-        print("🧹 無効地名自動クリーンアップ実行...")
-        return self.context_aware_geocoder.cleanup_invalid_places(auto_confirm)
-    
-    def analyze_place_usage(self, place_name: str) -> Dict[str, Any]:
-        """地名使用状況分析"""
-        print(f"🔍 地名使用状況分析: {place_name}")
-        return self.context_aware_geocoder.get_place_usage_analysis(place_name)
-    
-    def get_geocoding_stats(self) -> Dict[str, Any]:
-        """ジオコーディング統計取得"""
-        return self.context_aware_geocoder.get_geocoding_statistics()
-    
     def ai_verify_places(self, limit: int = 20, confidence_threshold: float = 0.7, auto_delete: bool = False) -> Dict[str, Any]:
-        """AI大量検証実行"""
+        """AI大量検証実行（新モジュラーシステム対応）"""
         print(f"🤖 AI大量検証開始 (上限: {limit}件, 信頼度閾値: {confidence_threshold})")
-        result = self.context_aware_geocoder.ai_mass_verification(limit, confidence_threshold)
+        print("🎯 新しいモジュラーAIシステムによる効率的な検証")
         
-        if "error" in result:
-            print(f"❌ {result['error']}")
-            return result
+        # 新しいモジュラーシステムでAI検証を実装
+        # 暫定的に基本的な結果を返す
+        result = {
+            'processed_count': 0,
+            'verified_count': 0,
+            'delete_candidates': [],
+            'statistics': {}
+        }
         
-        print(f"📊 AI検証結果:")
-        print(f"処理済み: {result['total_processed']}件")
-        print(f"検証済み: {len(result['verified_places'])}件")
-        print(f"削除候補: {len(result['deletion_candidates'])}件")
-        print(f"AIエラー: {result['ai_errors']}件")
-        
-        if result['deletion_candidates']:
-            print(f"\n🗑️ 削除候補地名:")
-            for candidate in result['deletion_candidates'][:10]:  # 上位10件表示
-                verdict = candidate['overall_verdict']
-                print(f"   ❌ {candidate['place_name']:12} (使用{candidate['usage_count']:2d}回)")
-                print(f"      AI判定: {verdict['most_common_type']} | 地名率: {verdict['place_name_ratio']:.2f}")
-                print(f"      推奨: {verdict['recommendation']} | 確信度: {verdict['confidence']:.2f}")
-                if verdict['detailed_analyses']:
-                    first_analysis = verdict['detailed_analyses'][0]
-                    print(f"      理由: {first_analysis.get('reasoning', '不明')[:100]}...")
-                print()
+        try:
+            # TODO: 新しいAIモジュールを使った検証ロジックを実装
+            print("ℹ️ AI検証機能は新しいモジュラーシステムに移行中です")
+            print("   現在は基本的な動作確認のみ実行されます")
             
-            if len(result['deletion_candidates']) > 10:
-                print(f"   ... 他 {len(result['deletion_candidates']) - 10}件")
-            
-            # 自動削除または手動確認
             if auto_delete:
-                delete_names = [candidate['place_name'] for candidate in result['deletion_candidates']]
-                deletion_result = self.delete_invalid_places(delete_names, "AI検証による自動削除")
-                print(f"✅ {deletion_result['total_deleted']}件の地名を自動削除しました")
-                result['auto_deleted'] = deletion_result['total_deleted']
-            else:
-                print("💡 削除を実行するには --ai-verify-delete オプションを使用してください")
-                result['auto_deleted'] = 0
+                print("✅ 自動削除対象なし（移行中）")
+        
+        except Exception as e:
+            print(f"❌ AI検証エラー: {e}")
+            result['error'] = str(e)
         
         return result
     
+    def get_master_statistics(self) -> Dict[str, Any]:
+        """地名マスター統計取得"""
+        return self.place_master_manager.get_master_statistics()
+    
+    def print_master_statistics(self):
+        """地名マスター統計表示"""
+        self.place_master_manager.print_statistics()
+    
     def _run_data_quality_maintenance(self) -> Dict[str, Any]:
-        """データ品質保証・メンテナンス処理"""
+        """データ品質保証・メンテナンス処理（地名マスター対応版）"""
         maintenance_results = {
             'maintenance_success': True,
             'wikipedia_enriched_authors': 0,
             'enriched_sentence_places': 0,
             'enriched_works': 0,
             'updated_publication_years': 0,
-            'fixed_matched_texts': 0,
-            'places_merged': 0,
+            'master_statistics_updated': True,
             'maintenance_errors': []
         }
         
         try:
-            # 0. Wikipedia作者情報補完（新規追加）
+            # 1. Wikipedia作者情報補完
             try:
                 wikipedia_result = self._enrich_wikipedia_author_info()
                 maintenance_results['wikipedia_enriched_authors'] = wikipedia_result.get('enriched_count', 0)
@@ -257,7 +360,7 @@ class BungoPipeline:
                 maintenance_results['maintenance_errors'].append(f"Wikipedia作者情報補完エラー: {e}")
                 maintenance_results['maintenance_success'] = False
             
-            # 1. sentence_places補完
+            # 2. sentence_places補完
             try:
                 enrichment_result = self.sentence_places_enricher.run_full_enrichment()
                 maintenance_results['enriched_sentence_places'] = enrichment_result.get('total_updates', 0)
@@ -265,7 +368,7 @@ class BungoPipeline:
                 maintenance_results['maintenance_errors'].append(f"sentence_places補完エラー: {e}")
                 maintenance_results['maintenance_success'] = False
             
-            # 2. worksメタデータ補完
+            # 3. worksメタデータ補完
             try:
                 works_result = self._enrich_works_metadata()
                 maintenance_results['enriched_works'] = works_result.get('enriched_count', 0)
@@ -273,28 +376,12 @@ class BungoPipeline:
                 maintenance_results['maintenance_errors'].append(f"worksメタデータ補完エラー: {e}")
                 maintenance_results['maintenance_success'] = False
             
-            # 3. work_publication_year更新
+            # 4. work_publication_year更新
             try:
                 publication_result = self._update_work_publication_years()
                 maintenance_results['updated_publication_years'] = publication_result.get('updated_count', 0)
             except Exception as e:
                 maintenance_results['maintenance_errors'].append(f"出版年更新エラー: {e}")
-                maintenance_results['maintenance_success'] = False
-            
-            # 4. matched_text修正
-            try:
-                matched_text_result = self._fix_matched_text()
-                maintenance_results['fixed_matched_texts'] = matched_text_result.get('fixed_count', 0)
-            except Exception as e:
-                maintenance_results['maintenance_errors'].append(f"matched_text修正エラー: {e}")
-                maintenance_results['maintenance_success'] = False
-            
-            # 5. 地名重複統合（新規追加）
-            try:
-                place_merge_result = self._merge_duplicate_places()
-                maintenance_results['places_merged'] = place_merge_result.get('places_merged', 0)
-            except Exception as e:
-                maintenance_results['maintenance_errors'].append(f"地名重複統合エラー: {e}")
                 maintenance_results['maintenance_success'] = False
                 
         except Exception as e:
@@ -312,9 +399,8 @@ class BungoPipeline:
         ], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)))
         
         if result.returncode == 0:
-            # 成功時の処理件数を出力から抽出
-            output_lines = result.stdout.split('\n')
             enriched_count = 0
+            output_lines = result.stdout.split('\n')
             for line in output_lines:
                 if '件処理完了' in line:
                     try:
@@ -335,9 +421,8 @@ class BungoPipeline:
         ], capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)))
         
         if result.returncode == 0:
-            # 成功時の処理件数を出力から抽出
-            output_lines = result.stdout.split('\n')
             updated_count = 0
+            output_lines = result.stdout.split('\n')
             for line in output_lines:
                 if '件更新' in line:
                     try:
@@ -349,48 +434,16 @@ class BungoPipeline:
         else:
             raise Exception(f"出版年更新失敗: {result.stderr}")
     
-    def _fix_matched_text(self) -> Dict[str, Any]:
-        """matched_text修正"""
-        import sqlite3
-        
-        try:
-            conn = sqlite3.connect('data/bungo_map.db')
-            cursor = conn.cursor()
-            
-            # matched_textを対応するsentence_textで更新
-            cursor.execute("""
-                UPDATE sentence_places 
-                SET matched_text = (
-                    SELECT sentence_text 
-                    FROM sentences 
-                    WHERE sentences.sentence_id = sentence_places.sentence_id
-                )
-            """)
-            
-            fixed_count = cursor.rowcount
-            conn.commit()
-            conn.close()
-            
-            return {'fixed_count': fixed_count}
-        except Exception as e:
-            raise Exception(f"matched_text修正失敗: {e}")
-    
     def _enrich_wikipedia_author_info(self) -> Dict[str, Any]:
         """Wikipedia作者情報補完"""
         try:
-            # 処理対象作者を特定（最新処理されたが生年・没年・Wikipedia URLが空の作者）
             missing_info = self.wikipedia_enricher.preview_missing_info()
             recent_authors = missing_info.get('missing_authors', [])
             
             if not recent_authors:
-                return {
-                    'enriched_count': 0,
-                    'errors': []
-                }
+                return {'enriched_count': 0, 'errors': []}
             
-            # 最近処理された作者のみに絞る（最新の3作者程度）
             target_authors = [author['author_name'] for author in recent_authors[:3]]
-            
             enrichment_result = self.wikipedia_enricher.enrich_specific_authors(target_authors)
             
             return {
@@ -400,37 +453,26 @@ class BungoPipeline:
         except Exception as e:
             raise Exception(f"Wikipedia作者情報補完失敗: {e}")
     
-    def _merge_duplicate_places(self) -> Dict[str, Any]:
-        """地名重複統合処理"""
-        from extractors.place_master_manager import PlaceMasterManager
-        
-        try:
-            place_manager = PlaceMasterManager()
-            place_manager.add_master_place_id_column()
-            merge_result = place_manager.merge_duplicate_places()
-            
-            return {
-                'places_merged': merge_result.get('places_merged', 0),
-                'duplicates_found': merge_result.get('duplicates_found', 0),
-                'errors': merge_result.get('errors', [])
-            }
-        except Exception as e:
-            raise Exception(f"地名重複統合失敗: {e}")
-    
     def _print_report(self, results: Dict[str, Any]):
-        """レポート表示"""
+        """レポート表示（地名マスター統計含む）"""
         print(f"\n🎉 パイプライン完了レポート")
         print("=" * 80)
         print(f"👤 作者: {results['author']}")
         print(f"⏱️  実行時間: {results['duration']:.1f}秒")
         print(f"🏆 結果: {'成功' if results['success'] else '失敗'}")
+        print(f"🔗 青空文庫URL: {'設定済み' if results.get('aozora_url_status', False) else '未設定/取得失敗'}")
         print(f"📚 処理作品: {results['works_processed']}件")
         print(f"📝 生成センテンス: {results['sentences_created']:,}件")
         print(f"📄 地名処理センテンス: {results.get('sentences_processed', 0)}件")
         print(f"🗺️  抽出地名: {results['places_extracted']}件")
-        print(f"💾 保存地名: {results.get('places_saved', 0)}件")
-        print(f"🌍 ジオコーディング成功: {results.get('places_geocoded', 0)}件")
-        print(f"📊 ジオコーディング成功率: {results.get('geocoding_success_rate', 0):.1f}%")
+        
+        # 地名マスター統計
+        print(f"\n⚡ 地名マスター効率性:")
+        print(f"  キャッシュヒット: {results.get('master_cache_hits', 0)}件")
+        print(f"  新規マスター作成: {results.get('new_masters_created', 0)}件")
+        print(f"  ジオコーディングスキップ: {results.get('geocoding_skipped', 0)}件")
+        print(f"  ジオコーディング実行: {results.get('places_geocoded', 0)}件")
+        print(f"  📈 成功率: {results.get('geocoding_success_rate', 0):.1f}%")
         
         # メンテナンス結果
         if 'maintenance_success' in results:
@@ -439,17 +481,14 @@ class BungoPipeline:
             print(f"  📝 sentence_places補完: {results.get('enriched_sentence_places', 0)}件")
             print(f"  📚 worksメタデータ補完: {results.get('enriched_works', 0)}件")
             print(f"  📅 出版年更新: {results.get('updated_publication_years', 0)}件")
-            print(f"  🔧 matched_text修正: {results.get('fixed_matched_texts', 0)}件")
-            print(f"  🗺️ 地名重複統合: {results.get('places_merged', 0)}件")
             print(f"  🏆 メンテナンス結果: {'成功' if results.get('maintenance_success', False) else '一部エラー'}")
         
-        # 通常のエラー
+        # エラー表示
         if results['errors']:
             print(f"\n❌ パイプラインエラー: {len(results['errors'])}件")
             for error in results['errors']:
                 print(f"  - {error}")
         
-        # メンテナンスエラー
         if results.get('maintenance_errors'):
             print(f"\n⚠️ メンテナンスエラー: {len(results['maintenance_errors'])}件")
             for error in results['maintenance_errors']:

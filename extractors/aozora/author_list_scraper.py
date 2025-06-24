@@ -9,12 +9,15 @@ import requests
 import re
 import logging
 import time
+import sqlite3
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from dataclasses import dataclass
 import json
 from datetime import datetime
+import os
+import argparse
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +35,13 @@ class AuthorInfo:
 class AuthorListScraper:
     """青空文庫作家リスト専用スクレイパー"""
     
-    def __init__(self, rate_limit: float = 1.0):
+    def __init__(self, rate_limit: float = 1.0, db_path: str = "data/bungo_map.db"):
         """初期化"""
         self.base_url = "https://www.aozora.gr.jp"
         self.author_list_url = "https://www.aozora.gr.jp/index_pages/person_all.html"
         self.rate_limit = rate_limit
         self.last_request_time = 0
+        self.db_path = db_path
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -70,7 +74,7 @@ class AuthorListScraper:
         
         self.last_request_time = time.time()
     
-    def fetch_all_authors(self) -> List[AuthorInfo]:
+    def fetch_all_authors(self, update_database: bool = True) -> List[AuthorInfo]:
         """全作家情報を取得"""
         print("📚 青空文庫全作家情報取得開始")
         print("=" * 60)
@@ -82,7 +86,97 @@ class AuthorListScraper:
         all_authors.extend(main_authors)
         
         print(f"✅ 全作家取得完了: {len(all_authors)}名")
+        
+        # データベース更新オプション
+        if update_database and os.path.exists(self.db_path):
+            print("\n📊 データベース青空文庫URL更新開始")
+            self.update_database_urls(all_authors)
+        
         return all_authors
+    
+    def update_database_urls(self, authors: List[AuthorInfo]) -> Dict[str, int]:
+        """データベースの青空文庫URLを更新"""
+        try:
+            # 青空文庫作者データをマッピング作成
+            aozora_urls = {}
+            for author in authors:
+                if author.author_url:
+                    aozora_urls[author.name] = author.author_url
+            
+            print(f"青空文庫作者データ: {len(aozora_urls)}名のURL情報")
+            
+            # データベース接続
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 青空文庫URL未設定の作者を取得
+            cursor.execute('''
+                SELECT author_id, author_name 
+                FROM authors 
+                WHERE aozora_author_url IS NULL OR aozora_author_url = ''
+                ORDER BY author_name
+            ''')
+            authors_without_url = cursor.fetchall()
+            
+            print(f"URL未設定作者: {len(authors_without_url)}名")
+            
+            # マッチング・更新処理
+            updated_count = 0
+            matched_count = 0
+            
+            for author_id, author_name in authors_without_url:
+                # 完全一致チェック
+                if author_name in aozora_urls:
+                    url = aozora_urls[author_name]
+                    cursor.execute(
+                        'UPDATE authors SET aozora_author_url = ? WHERE author_id = ?',
+                        (url, author_id)
+                    )
+                    updated_count += 1
+                    matched_count += 1
+                    print(f'✅ 完全一致: {author_name} -> {url}')
+                else:
+                    # 部分一致チェック（スペース除去など）
+                    author_name_clean = author_name.replace(' ', '').replace('　', '')
+                    found = False
+                    
+                    for aozora_name, url in aozora_urls.items():
+                        aozora_name_clean = aozora_name.replace(' ', '').replace('　', '')
+                        if author_name_clean == aozora_name_clean:
+                            cursor.execute(
+                                'UPDATE authors SET aozora_author_url = ? WHERE author_id = ?',
+                                (url, author_id)
+                            )
+                            updated_count += 1
+                            matched_count += 1
+                            print(f'🔄 部分一致: {author_name} -> {aozora_name} -> {url}')
+                            found = True
+                            break
+                    
+                    if not found:
+                        print(f'❌ 未発見: {author_name}')
+            
+            # コミット
+            conn.commit()
+            conn.close()
+            
+            print(f'\n=== データベース更新結果 ===')
+            print(f'処理対象: {len(authors_without_url)}名')
+            print(f'マッチング成功: {matched_count}名')
+            print(f'DB更新: {updated_count}名')
+            print(f'未発見: {len(authors_without_url) - matched_count}名')
+            print('✅ データベース青空文庫URL更新完了')
+            
+            return {
+                'processed': len(authors_without_url),
+                'matched': matched_count,
+                'updated': updated_count,
+                'not_found': len(authors_without_url) - matched_count
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ データベース更新エラー: {e}")
+            return {'error': str(e)}
     
     def _fetch_authors_from_url(self, url: str, section: str) -> List[AuthorInfo]:
         """指定URLから作家情報を取得"""
@@ -260,7 +354,6 @@ class AuthorListScraper:
                 })
             
             # ディレクトリ作成
-            import os
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             
             # JSON保存
@@ -305,17 +398,127 @@ class AuthorListScraper:
             'top_authors': [(a.name, a.works_count) for a in top_authors],
             'average_works_per_author': round(total_works / total_authors, 2) if total_authors > 0 else 0
         }
+    
+    def find_author_url(self, author_name: str) -> Optional[str]:
+        """単一作者の青空文庫URLを検索"""
+        try:
+            # JSON設定ファイルから既存データを読み込み
+            json_path = "data/aozora_authors.json"
+            if os.path.exists(json_path):
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # 既存データから検索
+                for author in data.get('authors', []):
+                    if author['name'] == author_name and author.get('author_url'):
+                        return author['author_url']
+                    
+                    # 部分一致も試行
+                    author_clean = author['name'].replace(' ', '').replace('　', '')
+                    name_clean = author_name.replace(' ', '').replace('　', '')
+                    if author_clean == name_clean and author.get('author_url'):
+                        return author['author_url']
+            
+            # 既存データになければWebから取得
+            print(f"🔍 {author_name}の青空文庫URL検索中...")
+            authors = self.fetch_all_authors(update_database=False)
+            
+            for author in authors:
+                if author.name == author_name and author.author_url:
+                    return author.author_url
+                    
+                # 部分一致も試行
+                author_clean = author.name.replace(' ', '').replace('　', '')
+                name_clean = author_name.replace(' ', '').replace('　', '')
+                if author_clean == name_clean and author.author_url:
+                    return author.author_url
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 作者URL検索エラー: {e}")
+            return None
+    
+    def update_single_author_url(self, author_name: str) -> bool:
+        """単一作者の青空文庫URLをデータベースに更新"""
+        try:
+            # URLを検索
+            author_url = self.find_author_url(author_name)
+            
+            if not author_url:
+                print(f"❌ {author_name}の青空文庫URLが見つかりません")
+                return False
+            
+            # データベース更新
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                'UPDATE authors SET aozora_author_url = ? WHERE author_name = ?',
+                (author_url, author_name)
+            )
+            
+            if cursor.rowcount > 0:
+                conn.commit()
+                print(f"✅ {author_name}の青空文庫URL更新: {author_url}")
+                result = True
+            else:
+                print(f"❌ {author_name}がデータベースに見つかりません")
+                result = False
+            
+            conn.close()
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ 単一作者URL更新エラー: {e}")
+            return False
 
 def main():
     """メイン実行関数"""
+    parser = argparse.ArgumentParser(description='青空文庫作家リスト取得・データベース更新')
+    parser.add_argument('--update-db', action='store_true', 
+                        help='データベースの青空文庫URLを自動更新')
+    parser.add_argument('--no-update-db', action='store_true', 
+                        help='データベース更新をスキップ（JSONのみ保存）')
+    parser.add_argument('--db-path', default='data/bungo_map.db', 
+                        help='データベースファイルパス')
+    parser.add_argument('--author', type=str, 
+                        help='単一作者の青空文庫URL検索・更新')
+    
+    args = parser.parse_args()
+    
+    # スクレイパー初期化
+    scraper = AuthorListScraper(rate_limit=1.0, db_path=args.db_path)
+    
+    # 単一作者モード
+    if args.author:
+        print(f"🔍 単一作者モード: {args.author}")
+        print("=" * 60)
+        
+        success = scraper.update_single_author_url(args.author)
+        if success:
+            print(f"✅ {args.author}の青空文庫URL更新完了")
+        else:
+            print(f"❌ {args.author}の青空文庫URL更新失敗")
+        return
+    
+    # データベース更新設定
+    update_database = True  # デフォルト
+    if args.no_update_db:
+        update_database = False
+    elif args.update_db:
+        update_database = True
+    
     print("🗾 青空文庫作家リスト取得開始")
     print("=" * 60)
     
-    # スクレイパー初期化
-    scraper = AuthorListScraper(rate_limit=1.0)
+    if update_database:
+        print("📊 データベース更新: 有効")
+    else:
+        print("📊 データベース更新: 無効（JSONのみ保存）")
     
     # 全作家情報取得
-    authors = scraper.fetch_all_authors()
+    authors = scraper.fetch_all_authors(update_database=update_database)
     
     if authors:
         # 統計表示

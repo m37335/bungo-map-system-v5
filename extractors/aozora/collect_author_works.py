@@ -20,7 +20,7 @@ from typing import List, Dict, Optional
 sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/../'))
 
 from database.manager import DatabaseManager
-from extractors.aozora_scraper import AozoraScraper
+from .aozora_scraper import AozoraScraper
 
 # ログ設定
 logging.basicConfig(
@@ -77,15 +77,11 @@ class AuthorWorksCollector:
                     logger.debug(f"既存作品をスキップ: {title}")
                     continue
                 
-                # ジャンル判定（簡易版）
-                genre = self._detect_genre(title)
-                
                 # 作品をデータベースに保存
                 work_dict = {
                     'author_id': author_id,
                     'title': title,
-                    'work_url': urljoin(author_url, work_url),
-                    'genre': genre,
+                    'aozora_url': urljoin(author_url, work_url),
                     'created_at': datetime.now()
                 }
                 

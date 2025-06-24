@@ -19,15 +19,68 @@ import logging
 import openai
 import os
 import json
+import time
+import hashlib
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from threading import Lock
 
 # 環境変数読み込み
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# API制限管理用のグローバル変数
+_api_cache = {}
+_api_rate_limiter = {
+    'openai': {'last_call': 0, 'min_interval': 1.0},  # 1秒間隔
+    'google_maps': {'last_call': 0, 'min_interval': 0.1}  # 0.1秒間隔
+}
+_cache_lock = Lock()
+
+def _rate_limit_api(api_name: str, min_interval: float = 1.0):
+    """API レート制限管理"""
+    current_time = time.time()
+    last_call = _api_rate_limiter.get(api_name, {}).get('last_call', 0)
+    time_since_last = current_time - last_call
+    
+    if time_since_last < min_interval:
+        sleep_time = min_interval - time_since_last
+        logger.info(f"🕒 {api_name} レート制限: {sleep_time:.2f}秒待機")
+        time.sleep(sleep_time)
+    
+    _api_rate_limiter[api_name]['last_call'] = time.time()
+
+def _get_cache_key(text: str, api_type: str) -> str:
+    """キャッシュキー生成"""
+    content = f"{api_type}:{text}"
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+def _load_api_cache() -> Dict:
+    """APIキャッシュをファイルから読み込み"""
+    cache_file = "data/api_cache.json"
+    try:
+        if os.path.exists(cache_file):
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"キャッシュ読み込みエラー: {e}")
+    return {}
+
+def _save_api_cache(cache: Dict):
+    """APIキャッシュをファイルに保存"""
+    cache_file = "data/api_cache.json"
+    try:
+        with _cache_lock:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"キャッシュ保存エラー: {e}")
+
+# グローバルキャッシュ初期化
+_api_cache = _load_api_cache()
 
 @dataclass
 class ContextAnalysisResult:
@@ -640,11 +693,20 @@ class ContextAwareGeocoder:
                 japan_bounds['west'] <= lng <= japan_bounds['east'])
     
     def _analyze_context_with_llm(self, place_name: str, sentence: str) -> Optional[Dict[str, any]]:
-        """ChatGPTによる文脈分析"""
+        """ChatGPTによる文脈分析（キャッシュ対応）"""
         if not self.openai_enabled:
             return None
+        
+        # キャッシュチェック
+        cache_key = _get_cache_key(f"{place_name}:{sentence}", "openai_context")
+        if cache_key in _api_cache:
+            logger.info(f"🎯 キャッシュヒット: {place_name}")
+            return _api_cache[cache_key]
             
         try:
+            # レート制限
+            _rate_limit_api('openai', 1.0)
+            
             prompt = f"""
 以下の文章で使われている「{place_name}」について分析してください。
 
@@ -692,6 +754,10 @@ class ContextAwareGeocoder:
                 
                 # 結果の検証
                 if isinstance(result, dict) and 'is_place_name' in result:
+                    # キャッシュに保存
+                    _api_cache[cache_key] = result
+                    _save_api_cache(_api_cache)
+                    logger.info(f"💾 結果をキャッシュ: {place_name}")
                     return result
                 else:
                     logger.warning(f"ChatGPT応答の形式が不正: {response_text}")
@@ -844,31 +910,32 @@ class ContextAwareGeocoder:
         
         for place_name in place_names:
             try:
-                # 地名の存在確認
-                cursor.execute('SELECT place_id, place_name FROM places WHERE place_name = ?', (place_name,))
+                # place_mastersから地名の存在確認
+                cursor.execute('SELECT master_id, display_name FROM place_masters WHERE display_name = ?', (place_name,))
                 place_data = cursor.fetchone()
                 
                 if not place_data:
                     not_found_places.append(place_name)
                     continue
                 
-                place_id = place_data[0]
+                master_id = place_data[0]
                 
                 # 関連するsentence_placesレコードを削除
-                cursor.execute('DELETE FROM sentence_places WHERE place_id = ?', (place_id,))
+                cursor.execute('DELETE FROM sentence_places WHERE master_id = ?', (master_id,))
                 deleted_relations = cursor.rowcount
                 
-                # placesレコードを削除
-                cursor.execute('DELETE FROM places WHERE place_id = ?', (place_id,))
+                # place_mastersのvalidation_statusを'rejected'に設定（論理削除）
+                cursor.execute('UPDATE place_masters SET validation_status = ?, updated_at = CURRENT_TIMESTAMP WHERE master_id = ?', 
+                             ('rejected', master_id))
                 
                 deleted_places.append({
                     "place_name": place_name,
-                    "place_id": place_id,
+                    "master_id": master_id,
                     "deleted_relations": deleted_relations,
                     "reason": reason
                 })
                 
-                logger.info(f"🗑️ 地名削除完了: {place_name} (ID: {place_id}, 関連: {deleted_relations}件)")
+                logger.info(f"🗑️ 地名削除完了: {place_name} (ID: {master_id}, 関連: {deleted_relations}件)")
                 
             except Exception as e:
                 logger.error(f"地名削除エラー ({place_name}): {str(e)}")
@@ -1032,15 +1099,15 @@ class ContextAwareGeocoder:
         
         # 検証対象の地名を取得（使用頻度が低い・未検証の地名を優先）
         query = '''
-            SELECT p.place_id, p.place_name, p.confidence, p.source_system,
+            SELECT pm.master_id, pm.display_name, pm.geocoding_confidence, pm.geocoding_source,
                    COUNT(sp.sentence_id) as usage_count,
                    GROUP_CONCAT(s.sentence_text, '|||') as all_sentences
-            FROM places p
-            JOIN sentence_places sp ON p.place_id = sp.place_id
+            FROM place_masters pm
+            JOIN sentence_places sp ON pm.master_id = sp.master_id
             JOIN sentences s ON sp.sentence_id = s.sentence_id
-            WHERE p.verification_status IS NULL OR p.verification_status != 'ai_verified'
-            GROUP BY p.place_id, p.place_name
-            ORDER BY usage_count ASC, p.confidence ASC
+            WHERE pm.verification_status IS NULL OR pm.verification_status != 'ai_verified'
+            GROUP BY pm.master_id, pm.display_name
+            ORDER BY usage_count ASC, pm.geocoding_confidence ASC
         '''
         
         if limit:
@@ -1058,7 +1125,7 @@ class ContextAwareGeocoder:
         
         logger.info(f"🤖 AI大量検証開始: {len(places_to_verify)}件")
         
-        for place_id, place_name, confidence, source_system, usage_count, all_sentences in places_to_verify:
+        for master_id, place_name, confidence, source_system, usage_count, all_sentences in places_to_verify:
             try:
                 sentences = all_sentences.split('|||') if all_sentences else []
                 
@@ -1077,7 +1144,7 @@ class ContextAwareGeocoder:
                 overall_verdict = self._calculate_overall_verdict(ai_analyses)
                 
                 place_result = {
-                    'place_id': place_id,
+                    'master_id': master_id,
                     'place_name': place_name,
                     'usage_count': usage_count,
                     'current_confidence': confidence,
@@ -1094,8 +1161,8 @@ class ContextAwareGeocoder:
                     verification_results['verified_places'].append(place_result)
                     # データベースに検証済みマークを付与
                     cursor.execute(
-                        "UPDATE places SET verification_status = 'ai_verified', ai_confidence = ? WHERE place_id = ?",
-                        (overall_verdict['confidence'], place_id)
+                        "UPDATE place_masters SET verification_status = 'ai_verified', ai_confidence = ? WHERE master_id = ?",
+                        (overall_verdict['confidence'], master_id)
                     )
                     logger.info(f"✅ 検証済み: {place_name} (AI確信度: {overall_verdict['confidence']:.2f})")
                 
