@@ -1,0 +1,543 @@
+# 文豪地図システム v4.0 アップデート TODO リスト
+# 作成日: 2025年6月25日
+# 目的: データベース再設計提案に基づく段階的アップデート実装
+
+project:
+  name: "文豪地図システム v4.0"
+  version: "4.1.0-dev"
+  priority: "high"
+  deadline: "2025年7月末"
+
+# ========================================
+# フェーズ1: 緊急対応（データベース再設計）
+# ========================================
+phase1:
+  name: "データベース再設計・基盤強化"
+  priority: "critical"
+  estimated_days: 14
+  
+  database_schema:
+    description: "現行のSQLiteベースから新設計への移行"
+    tasks:
+      - task: "sectionsテーブル新設"
+        priority: "high"
+        estimated_hours: 8
+        dependencies: []
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "階層的文書構造管理（chapter -> paragraph -> sentence）"
+          - "parent_section_id による自己参照関係"
+          - "FULLTEXT インデックス対応"
+        sql: |
+          CREATE TABLE sections (
+              id BIGINT PRIMARY KEY AUTOINCREMENT,
+              work_id BIGINT NOT NULL,
+              section_type ENUM('chapter', 'paragraph', 'sentence') NOT NULL,
+              parent_section_id BIGINT NULL,
+              section_number INT,
+              title VARCHAR(200),
+              content TEXT,
+              character_position INT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+              FOREIGN KEY (parent_section_id) REFERENCES sections(id) ON DELETE CASCADE
+          );
+
+      - task: "ai_verificationsテーブル新設"
+        priority: "high"
+        estimated_hours: 6
+        dependencies: ["sectionsテーブル新設"]
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "AI検証履歴の完全管理"
+          - "検証タイプ別分類"
+          - "JSONレスポンス保存"
+        sql: |
+          CREATE TABLE ai_verifications (
+              id BIGINT PRIMARY KEY AUTOINCREMENT,
+              place_mention_id BIGINT NOT NULL,
+              ai_model VARCHAR(50) NOT NULL,
+              verification_type ENUM('place_validation', 'context_analysis', 'false_positive_check'),
+              input_context TEXT,
+              ai_response JSON,
+              confidence_score DECIMAL(3, 2),
+              is_valid_place BOOLEAN,
+              reasoning TEXT,
+              verification_status ENUM('pending', 'verified', 'rejected', 'uncertain'),
+              verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+
+      - task: "statistics_cacheテーブル新設"
+        priority: "medium"
+        estimated_hours: 4
+        dependencies: []
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "統計情報の高速キャッシュ"
+          - "有効期限管理"
+          - "JSON データ格納"
+        sql: |
+          CREATE TABLE statistics_cache (
+              id BIGINT PRIMARY KEY AUTOINCREMENT,
+              cache_key VARCHAR(200) NOT NULL UNIQUE,
+              cache_type ENUM('author_stats', 'work_stats', 'place_stats', 'global_stats'),
+              entity_id BIGINT,
+              data JSON NOT NULL,
+              expires_at TIMESTAMP,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+
+      - task: "processing_logsテーブル新設"
+        priority: "medium"
+        estimated_hours: 4
+        dependencies: []
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "処理履歴の詳細管理"
+          - "エラー追跡"
+          - "統計情報保存"
+        sql: |
+          CREATE TABLE processing_logs (
+              id BIGINT PRIMARY KEY AUTOINCREMENT,
+              work_id BIGINT,
+              process_type ENUM('text_extraction', 'place_extraction', 'geocoding', 'ai_verification', 'full_pipeline'),
+              status ENUM('started', 'completed', 'failed', 'cancelled'),
+              started_at TIMESTAMP,
+              completed_at TIMESTAMP,
+              error_message TEXT,
+              statistics JSON,
+              configuration JSON
+          );
+
+      - task: "既存テーブル改良"
+        priority: "high"
+        estimated_hours: 12
+        dependencies: ["新テーブル作成完了"]
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/migration_v5.py"
+        details:
+          - "place_mastersテーブルのname_variants JSON対応"
+          - "authorsテーブルのname_reading追加"
+          - "worksテーブルのcontent_status追加"
+          - "sentence_placesをplace_mentionsに改名・拡張"
+
+  database_models:
+    description: "Pydanticモデルとデータベースモデルの追加"
+    tasks:
+      - task: "Section モデル追加"
+        priority: "high"
+        estimated_hours: 4
+        dependencies: ["sectionsテーブル新設"]
+        files:
+          - "bungo-map-system-v4/core/models.py"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "SectionBase, SectionCreate, SectionResponse"
+          - "階層構造の表現"
+          - "文書構造解析との連携"
+
+      - task: "AIVerification モデル追加"
+        priority: "high"
+        estimated_hours: 3
+        dependencies: ["ai_verificationsテーブル新設"]
+        files:
+          - "bungo-map-system-v4/core/models.py"
+          - "bungo-map-system-v4/database/models.py"
+        details:
+          - "AIVerificationBase, AIVerificationCreate, AIVerificationResponse"
+          - "検証結果の統一管理"
+
+      - task: "StatisticsCache モデル追加"
+        priority: "medium"
+        estimated_hours: 2
+        dependencies: ["statistics_cacheテーブル新設"]
+        files:
+          - "bungo-map-system-v4/core/models.py"
+          - "bungo-map-system-v4/database/models.py"
+
+      - task: "ProcessingLog モデル追加"
+        priority: "medium"
+        estimated_hours: 2
+        dependencies: ["processing_logsテーブル新設"]
+        files:
+          - "bungo-map-system-v4/core/models.py"
+          - "bungo-map-system-v4/database/models.py"
+
+  migration:
+    description: "既存データの安全な移行"
+    tasks:
+      - task: "データ移行スクリプト作成"
+        priority: "critical"
+        estimated_hours: 16
+        dependencies: ["全新テーブル作成完了"]
+        files:
+          - "bungo-map-system-v4/database/migration_v4_to_v5.py"
+          - "bungo-map-system-v4/scripts/migrate_data.py"
+        details:
+          - "sentence_places -> place_mentions 移行"
+          - "重複地名の統合処理"
+          - "バックアップ作成"
+          - "ロールバック機能"
+
+      - task: "データ検証スクリプト"
+        priority: "high"
+        estimated_hours: 8
+        dependencies: ["データ移行スクリプト作成"]
+        files:
+          - "bungo-map-system-v4/scripts/validate_migration.py"
+          - "bungo-map-system-v4/tests/test_migration.py"
+        details:
+          - "移行前後のデータ整合性チェック"
+          - "レコード数検証"
+          - "関係性検証"
+
+# ========================================
+# フェーズ2: API・機能拡張
+# ========================================
+phase2:
+  name: "API・機能拡張"
+  priority: "high"
+  estimated_days: 12
+  dependencies: ["phase1完了"]
+
+  api_endpoints:
+    description: "新機能に対応したAPIエンドポイント追加"
+    tasks:
+      - task: "階層構造API追加"
+        priority: "high"
+        estimated_hours: 8
+        dependencies: ["Section モデル追加"]
+        files:
+          - "bungo-map-system-v4/main.py"
+          - "bungo-map-system-v4/database/crud.py"
+        endpoints:
+          - "GET /works/{work_id}/sections - 作品の章構造取得"
+          - "POST /sections/ - 章・段落・文の作成"
+          - "GET /sections/{section_id}/children - 子要素取得"
+          - "GET /sections/{section_id}/context - 文脈情報取得"
+
+      - task: "AI検証API追加"
+        priority: "high"
+        estimated_hours: 10
+        dependencies: ["AIVerification モデル追加"]
+        files:
+          - "bungo-map-system-v4/main.py"
+          - "bungo-map-system-v4/ai/verification_manager.py"
+        endpoints:
+          - "POST /ai/verify/place - 単一地名検証"
+          - "POST /ai/verify/batch - 一括地名検証"
+          - "GET /ai/verifications/{verification_id} - 検証結果取得"
+          - "GET /places/{place_id}/verifications - 地名の検証履歴"
+
+      - task: "統計・分析API追加"
+        priority: "medium"
+        estimated_hours: 12
+        dependencies: ["StatisticsCache モデル追加"]
+        files:
+          - "bungo-map-system-v4/main.py"
+          - "bungo-map-system-v4/core/statistics_engine.py"
+        endpoints:
+          - "GET /statistics/global - システム全体統計"
+          - "GET /statistics/geographical/{region} - 地域別統計"
+          - "GET /places/search/nearby - 地理的近接検索"
+          - "GET /places/timeline/{place_id} - 地名の時代変遷"
+          - "GET /authors/compare/{author1_id}/{author2_id} - 作家比較"
+
+      - task: "処理管理API追加"
+        priority: "medium"
+        estimated_hours: 6
+        dependencies: ["ProcessingLog モデル追加"]
+        files:
+          - "bungo-map-system-v4/main.py"
+          - "bungo-map-system-v4/core/processing_manager.py"
+        endpoints:
+          - "GET /processing/status/{job_id} - 処理状況確認"
+          - "POST /processing/pipeline/start - 処理パイプライン開始"
+          - "GET /cache/statistics - キャッシュ統計"
+          - "DELETE /cache/clear/{cache_type} - キャッシュクリア"
+
+  new_modules:
+    description: "新機能実装用モジュール作成"
+    tasks:
+      - task: "HierarchicalExtractor クラス"
+        priority: "high"
+        estimated_hours: 12
+        dependencies: ["Section モデル追加"]
+        files:
+          - "bungo-map-system-v4/extractors/hierarchical_extractor.py"
+        details:
+          - "章・段落・文の階層的抽出"
+          - "文脈情報の保持"
+          - "青空文庫形式対応"
+
+      - task: "AIVerificationManager クラス"
+        priority: "high"
+        estimated_hours: 10
+        dependencies: ["AIVerification モデル追加"]
+        files:
+          - "bungo-map-system-v4/ai/verification_manager.py"
+        details:
+          - "batch_verify() メソッド"
+          - "get_verification_stats() メソッド"
+          - "OpenAI API統合"
+
+      - task: "StatisticsEngine クラス"
+        priority: "medium"
+        estimated_hours: 8
+        dependencies: ["StatisticsCache モデル追加"]
+        files:
+          - "bungo-map-system-v4/core/statistics_engine.py"
+        details:
+          - "generate_cache() メソッド"
+          - "invalidate_cache() メソッド"
+          - "リアルタイム統計計算"
+
+      - task: "GeoSpatialAnalyzer クラス"
+        priority: "low"
+        estimated_hours: 6
+        dependencies: []
+        files:
+          - "bungo-map-system-v4/ai/geospatial_analyzer.py"
+        details:
+          - "nearby_search() メソッド"
+          - "cluster_analysis() メソッド"
+          - "空間インデックス活用"
+
+# ========================================
+# フェーズ3: パフォーマンス最適化
+# ========================================
+phase3:
+  name: "パフォーマンス最適化・品質向上"
+  priority: "medium"
+  estimated_days: 8
+  dependencies: ["phase2完了"]
+
+  indexing:
+    description: "インデックス戦略の高度化"
+    tasks:
+      - task: "複合インデックス最適化"
+        priority: "high"
+        estimated_hours: 6
+        files:
+          - "bungo-map-system-v4/database/schema_v5.sql"
+          - "bungo-map-system-v4/database/index_optimization.sql"
+        details:
+          - "地名検索用複合インデックス"
+          - "統計計算用インデックス"
+          - "地理的検索用空間インデックス"
+
+      - task: "全文検索インデックス"
+        priority: "medium"
+        estimated_hours: 4
+        files:
+          - "bungo-map-system-v4/database/fulltext_search.sql"
+        details:
+          - "コンテンツ検索用FULLTEXT"
+          - "文脈検索最適化"
+
+  caching:
+    description: "キャッシュ戦略の実装"
+    tasks:
+      - task: "Redis統合キャッシュ"
+        priority: "medium"
+        estimated_hours: 8
+        files:
+          - "bungo-map-system-v4/core/cache_v2.py"
+          - "bungo-map-system-v4/core/redis_cache.py"
+        details:
+          - "統計情報自動キャッシュ"
+          - "地理的検索結果キャッシュ"
+          - "TTL管理"
+
+  monitoring:
+    description: "監視・ログ機能強化"
+    tasks:
+      - task: "PerformanceMonitor クラス"
+        priority: "low"
+        estimated_hours: 6
+        files:
+          - "bungo-map-system-v4/core/performance_monitor.py"
+        details:
+          - "クエリ実行時間監視"
+          - "メモリ使用量追跡"
+          - "ボトルネック特定"
+
+# ========================================
+# フェーズ4: テスト・品質保証
+# ========================================
+phase4:
+  name: "テスト・品質保証"
+  priority: "high"
+  estimated_days: 6
+  dependencies: ["phase3完了"]
+
+  testing:
+    description: "包括的テストスイート作成"
+    tasks:
+      - task: "ユニットテスト拡張"
+        priority: "high"
+        estimated_hours: 12
+        files:
+          - "bungo-map-system-v4/tests/test_new_models.py"
+          - "bungo-map-system-v4/tests/test_api_v5.py"
+          - "bungo-map-system-v4/tests/test_migration.py"
+        details:
+          - "新モデルのテスト"
+          - "API エンドポイントテスト"
+          - "移行処理テスト"
+
+      - task: "統合テスト"
+        priority: "high"
+        estimated_hours: 8
+        files:
+          - "bungo-map-system-v4/tests/test_integration_v5.py"
+        details:
+          - "エンドツーエンドテスト"
+          - "パフォーマンステスト"
+          - "データ整合性テスト"
+
+      - task: "負荷テスト"
+        priority: "medium"
+        estimated_hours: 6
+        files:
+          - "bungo-map-system-v4/tests/test_performance.py"
+        details:
+          - "大量データでの動作確認"
+          - "同時接続テスト"
+          - "メモリリークテスト"
+
+# ========================================
+# フェーズ5: ドキュメント更新
+# ========================================
+phase5:
+  name: "ドキュメント更新・デプロイ準備"
+  priority: "medium"
+  estimated_days: 4
+  dependencies: ["phase4完了"]
+
+  documentation:
+    description: "システム辞書・API仕様書更新"
+    tasks:
+      - task: "システム辞書v5更新"
+        priority: "high"
+        estimated_hours: 6
+        files:
+          - "bungo-map-system-v4/documents/システム辞書_v5.0_20250725.md"
+        details:
+          - "新テーブル構造の詳細追加"
+          - "新API仕様の記載"
+          - "パフォーマンス指標追加"
+
+      - task: "API仕様書更新"
+        priority: "high"
+        estimated_hours: 4
+        files:
+          - "bungo-map-system-v4/docs/api_specification_v5.0.md"
+        details:
+          - "新エンドポイント仕様"
+          - "リクエスト・レスポンス例"
+          - "エラーハンドリング"
+
+      - task: "移行ガイド作成"
+        priority: "medium"
+        estimated_hours: 4
+        files:
+          - "bungo-map-system-v4/docs/migration_guide_v4_to_v5.md"
+        details:
+          - "段階的移行手順"
+          - "ダウンタイム最小化方法"
+          - "ロールバック手順"
+
+# ========================================
+# リスク管理・注意事項
+# ========================================
+risks:
+  database_migration:
+    risk: "大量データ移行時のダウンタイム"
+    mitigation: "段階的移行・ホットスワップ方式採用"
+    contingency: "ロールバック機能完備"
+
+  performance_degradation:
+    risk: "新機能追加による性能低下"
+    mitigation: "各フェーズでベンチマーク実施"
+    contingency: "機能の段階的有効化"
+
+  api_compatibility:
+    risk: "既存API仕様の破壊的変更"
+    mitigation: "下位互換性維持・バージョニング"
+    contingency: "旧API並行運用"
+
+# ========================================
+# 成功指標
+# ========================================
+success_metrics:
+  performance:
+    - "クエリ実行時間：70%短縮達成"
+    - "ストレージ使用量：40%削減達成"
+    - "API レスポンス時間：< 200ms"
+
+  functionality:
+    - "新API エンドポイント：15個追加"
+    - "AI検証精度：95%以上"
+    - "処理エラー率：< 1%"
+
+  quality:
+    - "テストカバレッジ：90%以上"
+    - "Linter エラー：0件"
+    - "セキュリティ脆弱性：0件"
+
+# ========================================
+# 実行順序・依存関係
+# ========================================
+execution_order:
+  1: "phase1.database_schema.tasks[*]"
+  2: "phase1.database_models.tasks[*]"
+  3: "phase1.migration.tasks[*]"
+  4: "phase2.api_endpoints.tasks[*]"
+  5: "phase2.new_modules.tasks[*]"
+  6: "phase3.indexing.tasks[*]"
+  7: "phase3.caching.tasks[*]"
+  8: "phase4.testing.tasks[*]"
+  9: "phase5.documentation.tasks[*]"
+
+# ========================================
+# 緊急時対応計画
+# ========================================
+emergency_plan:
+  rollback_procedure:
+    - "処理停止・バックアップからの復旧"
+    - "旧バージョンへの即座切り戻し"
+    - "影響範囲の調査・報告"
+
+  hotfix_process:
+    - "緊急パッチの作成・テスト"
+    - "段階的デプロイ"
+    - "監視強化"
+
+# ========================================
+# 完了基準
+# ========================================
+completion_criteria:
+  technical:
+    - "全テストパス（ユニット・統合・負荷）"
+    - "パフォーマンス目標達成"
+    - "セキュリティ監査完了"
+
+  documentation:
+    - "システム辞書更新完了"
+    - "API仕様書更新完了"
+    - "移行ガイド作成完了"
+
+  deployment:
+    - "本番環境での動作確認"
+    - "監視設定完了"
+    - "バックアップ・復旧手順確認"
