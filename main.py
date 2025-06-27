@@ -5,10 +5,10 @@ from typing import List, Optional
 import logging
 from datetime import datetime
 
-from .database.config import get_db
-from .database.crud import DatabaseManager
-from .extractors.place_extractor import PlaceExtractor, ExtractedPlace
-from .core.models import (
+from database.config import get_db
+from database.crud import DatabaseManager
+from extractors.place_extractor import PlaceExtractor, ExtractedPlace
+from core.models import (
     AuthorCreate,
     AuthorResponse,
     WorkCreate,
@@ -24,7 +24,7 @@ from .core.models import (
     ProcessingLogBase, ProcessingLogCreate, ProcessingLogResponse,
     PlaceVerificationStats, AIModelStats, GlobalSystemStats
 )
-from .core.cache import CacheManager, cache_result
+from core.cache import CacheManager, cache_result
 
 # ロギングの設定
 logging.basicConfig(
